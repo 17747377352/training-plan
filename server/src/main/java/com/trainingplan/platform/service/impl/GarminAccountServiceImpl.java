@@ -201,7 +201,9 @@ public class GarminAccountServiceImpl implements GarminAccountService {
             case CollectorAuthResult.STATUS_INVALID_CREDENTIALS ->
                     new BusinessException(ErrorCode.GARMIN_INVALID_CREDENTIALS);
             case CollectorAuthResult.STATUS_RATE_LIMITED ->
-                    new BusinessException(ErrorCode.GARMIN_RATE_LIMITED);
+                    // 采集器的提示里带剩余冷却时间，直接透出比统一文案更有用。
+                    new BusinessException(ErrorCode.GARMIN_RATE_LIMITED,
+                            message == null ? ErrorCode.GARMIN_RATE_LIMITED.getMessage() : message);
             case CollectorAuthResult.STATUS_MFA_INVALID ->
                     new BusinessException(ErrorCode.GARMIN_AUTH_REQUIRED,
                             message == null ? ErrorCode.GARMIN_AUTH_REQUIRED.getMessage() : message);

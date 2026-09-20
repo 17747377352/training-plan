@@ -61,7 +61,8 @@ def create_app(
         MfaSessionStore(
             ttl_seconds=resolved_settings.mfa_session_ttl_seconds,
             max_sessions=resolved_settings.mfa_session_max,
-        )
+        ),
+        rate_limit_cooldown_seconds=resolved_settings.rate_limit_cooldown_seconds,
     )
     app = FastAPI(title="Training Plan Collector", docs_url=None, redoc_url=None, openapi_url=None)
 

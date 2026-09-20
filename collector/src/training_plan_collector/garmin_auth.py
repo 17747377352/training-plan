@@ -8,6 +8,7 @@ Garmin 的 MFA 中间态是一个存活的客户端对象（持有 HTTP 会话�
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 import uuid
@@ -122,18 +123,31 @@ class MfaSessionStore:
 
 
 class GarminAuthService:
-    """封装 Garmin 登录与 MFA，只向外交付 Token JSON。"""
+    """封装 Garmin 登录与 MFA，只向外交付 Token JSON。
+
+    Garmin 会对登录端点做 IP 级限流，并可能返回 Cloudflare 人机挑战。一旦出现
+    这两类失败，继续重试只会加深限流，因此服务进入冷却期，在冷却期内直接拒绝
+    请求而不触碰 Garmin。
+    """
 
     def __init__(
         self,
         session_store: MfaSessionStore,
         client_factory: ClientFactory | None = None,
+        rate_limit_cooldown_seconds: int = 900,
     ) -> None:
         self._sessions = session_store
         self._client_factory = client_factory or _default_client_factory
+        self._cooldown_seconds = rate_limit_cooldown_seconds
+        self._cooldown_until = 0.0
+        self._cooldown_lock = threading.Lock()
 
     def connect(self, email: str, password: str, region: str) -> AuthOutcome:
         """使用凭据登录 Garmin，必要时转入 MFA 流程。"""
+
+        cooling = self._cooldown_message()
+        if cooling is not None:
+            return AuthOutcome(STATUS_RATE_LIMITED, message=cooling)
 
         is_cn = region.strip().upper() == "CN"
         try:
@@ -144,20 +158,19 @@ class GarminAuthService:
                 "garmin_connect_rate_limited",
                 error_text=_truncate(exception),
             )
-            return AuthOutcome(STATUS_RATE_LIMITED, message="Garmin 请求过于频繁，请稍后重试")
+            self._enter_cooldown()
+            return AuthOutcome(STATUS_RATE_LIMITED, message=self._cooldown_message())
         except GarminConnectAuthenticationError:
             return AuthOutcome(STATUS_INVALID_CREDENTIALS, message="Garmin 账号或密码错误")
         except GarminConnectConnectionError as exception:
-            # 官方库的 5 段式登录链全部失败时会走到这里。常见原因是网络到不了
-            # Garmin 登录站点，或该 IP 被风控（HTML 挑战），并非密码错误。
+            # 官方库的 5 段式登录链全部失败时会走到这里。实测多为 IP 被限流
+            # 或 Cloudflare 人机挑战，并非密码错误，也不是本地网络不通。
             logger.warning(
                 "garmin_connect_unreachable",
                 error_text=_truncate(exception),
             )
-            return AuthOutcome(
-                STATUS_UNREACHABLE,
-                message="无法连接 Garmin 登录服务器，请检查网络后重试",
-            )
+            self._enter_cooldown()
+            return AuthOutcome(STATUS_UNREACHABLE, message=self._cooldown_message())
         except Exception as exception:  # noqa: BLE001 - 任何异常都不应把细节回传
             logger.warning(
                 "garmin_connect_failed",
@@ -168,13 +181,19 @@ class GarminAuthService:
 
         if first == MFA_REQUIRED_FLAG:
             session_id = self._sessions.put(client, second)
+            self._clear_cooldown()
             logger.info("garmin_mfa_required", session_count=self._sessions.size())
             return AuthOutcome(STATUS_MFA_REQUIRED, login_session_id=session_id)
 
+        self._clear_cooldown()
         return self._connected(client)
 
     def submit_mfa(self, login_session_id: str, mfa_code: str) -> AuthOutcome:
         """提交验证码完成登录；验证码错误时保留会话允许重试。"""
+
+        cooling = self._cooldown_message()
+        if cooling is not None:
+            return AuthOutcome(STATUS_RATE_LIMITED, message=cooling)
 
         session = self._sessions.get(login_session_id)
         if session is None:
@@ -182,16 +201,23 @@ class GarminAuthService:
         client, client_state = session
         try:
             client.resume_login(client_state, mfa_code)
-        except GarminConnectTooManyRequestsError:
-            return AuthOutcome(STATUS_RATE_LIMITED, message="验证码尝试过于频繁，请稍后再试")
+        except GarminConnectTooManyRequestsError as exception:
+            logger.warning("garmin_mfa_rate_limited", error_text=_truncate(exception))
+            self._enter_cooldown()
+            return AuthOutcome(STATUS_RATE_LIMITED, message=self._cooldown_message())
         except GarminConnectAuthenticationError:
             return AuthOutcome(STATUS_MFA_INVALID, message="验证码不正确，请重新输入")
         except Exception as exception:  # noqa: BLE001
-            logger.warning("garmin_mfa_failed", error_type=type(exception).__name__)
+            logger.warning(
+                "garmin_mfa_failed",
+                error_type=type(exception).__name__,
+                error_text=_truncate(exception),
+            )
             self._sessions.drop(login_session_id)
             return AuthOutcome(STATUS_FAILED, message="MFA 验证失败，请重新连接")
 
         self._sessions.drop(login_session_id)
+        self._clear_cooldown()
         return self._connected(client)
 
     def restore_session(self, token_json: str, region: str) -> SessionOutcome:
@@ -201,21 +227,24 @@ class GarminAuthService:
         """
 
         is_cn = region.strip().upper() == "CN"
+        cooling = self._cooldown_message()
+        if cooling is not None:
+            return SessionOutcome(STATUS_RATE_LIMITED, message=cooling)
+
         try:
             client = self._client_factory(None, None, is_cn, False)
             client.login(tokenstore=token_json)
         except GarminConnectTooManyRequestsError as exception:
             logger.warning("garmin_token_restore_rate_limited", error_text=_truncate(exception))
-            return SessionOutcome(STATUS_RATE_LIMITED, message="Garmin 请求过于频繁，请稍后重试")
+            self._enter_cooldown()
+            return SessionOutcome(STATUS_RATE_LIMITED, message=self._cooldown_message())
         except GarminConnectAuthenticationError:
             logger.info("garmin_token_rejected")
             return SessionOutcome(STATUS_TOKEN_INVALID, message="Garmin 令牌已失效，需要重新认证")
         except GarminConnectConnectionError as exception:
             logger.warning("garmin_token_restore_unreachable", error_text=_truncate(exception))
-            return SessionOutcome(
-                STATUS_UNREACHABLE,
-                message="无法连接 Garmin 服务器，请检查网络后重试",
-            )
+            self._enter_cooldown()
+            return SessionOutcome(STATUS_UNREACHABLE, message=self._cooldown_message())
         except Exception as exception:  # noqa: BLE001
             logger.warning(
                 "garmin_token_restore_failed",
@@ -223,8 +252,32 @@ class GarminAuthService:
                 error_text=_truncate(exception),
             )
             return SessionOutcome(STATUS_FAILED, message="Garmin 令牌校验失败")
+        self._clear_cooldown()
         logger.info("garmin_token_restored")
         return SessionOutcome(STATUS_CONNECTED, client=client)
+
+    def _cooldown_message(self) -> str | None:
+        """处于冷却期时返回带剩余时间的提示，否则返回 None。"""
+
+        with self._cooldown_lock:
+            remaining = self._cooldown_until - time.monotonic()
+        if remaining <= 0:
+            return None
+        minutes = max(1, math.ceil(remaining / 60))
+        return f"Garmin 已限流，约 {minutes} 分钟后可重试"
+
+    def _enter_cooldown(self) -> None:
+        """进入冷却期，期间不再触碰 Garmin。"""
+
+        with self._cooldown_lock:
+            self._cooldown_until = time.monotonic() + self._cooldown_seconds
+        logger.warning("garmin_cooldown_started", cooldown_seconds=self._cooldown_seconds)
+
+    def _clear_cooldown(self) -> None:
+        """调用成功后清除冷却期。"""
+
+        with self._cooldown_lock:
+            self._cooldown_until = 0.0
 
     def _connected(self, client: Any) -> AuthOutcome:
         """导出 Token JSON。调用方负责加密存储，日志中不得出现该值。"""

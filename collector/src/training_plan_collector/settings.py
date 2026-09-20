@@ -26,3 +26,5 @@ class CollectorSettings(BaseSettings):
     internal_port: int = 8090
     mfa_session_ttl_seconds: int = 600
     mfa_session_max: int = 100
+    # Garmin 登录被限流或遇到人机挑战后的冷却时间，期间不再发起任何 Garmin 请求。
+    rate_limit_cooldown_seconds: int = 900

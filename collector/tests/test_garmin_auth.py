@@ -66,15 +66,24 @@ class FakeGarminClient:
         return None, None
 
 
-def build_service(client: FakeGarminClient, ttl_seconds: int = 600, max_sessions: int = 100):
+def build_service(
+    client: FakeGarminClient,
+    ttl_seconds: int = 600,
+    max_sessions: int = 100,
+    cooldown_seconds: int = 900,
+):
     store = MfaSessionStore(ttl_seconds=ttl_seconds, max_sessions=max_sessions)
-    captured: dict[str, object] = {}
+    captured: dict[str, object] = {"factory_calls": 0}
 
     def factory(email: str, password: str, is_cn: bool, return_on_mfa: bool):
+        captured["factory_calls"] = int(captured["factory_calls"]) + 1
         captured.update(email=email, password=password, is_cn=is_cn, return_on_mfa=return_on_mfa)
         return client
 
-    return GarminAuthService(store, factory), store, captured
+    service = GarminAuthService(
+        store, factory, rate_limit_cooldown_seconds=cooldown_seconds
+    )
+    return service, store, captured
 
 
 def test_connect_returns_token_on_success():
@@ -204,6 +213,67 @@ def test_region_is_case_insensitive(region: str):
     service.connect("rider@example.com", "secret", region)
 
     assert captured["is_cn"] is True
+
+
+def test_rate_limit_starts_cooldown_and_blocks_further_calls():
+    """限流后必须停止触碰 Garmin，否则只会加深限流。"""
+
+    client = FakeGarminClient(login_error=GarminConnectTooManyRequestsError("429"))
+    service, _store, captured = build_service(client)
+
+    first = service.connect("rider@example.com", "secret", "GLOBAL")
+    second = service.connect("rider@example.com", "secret", "GLOBAL")
+
+    assert first.status == STATUS_RATE_LIMITED
+    assert second.status == STATUS_RATE_LIMITED
+    assert "分钟后可重试" in (second.message or "")
+    # 第二次请求被冷却期拦下，不应再调用 Garmin 客户端
+    assert captured["factory_calls"] == 1
+
+
+def test_unreachable_starts_cooldown():
+    client = FakeGarminClient(
+        login_error=GarminConnectConnectionError("All login strategies exhausted")
+    )
+    service, _store, captured = build_service(client)
+
+    service.connect("rider@example.com", "secret", "GLOBAL")
+    blocked = service.connect("rider@example.com", "secret", "GLOBAL")
+
+    assert blocked.status == STATUS_RATE_LIMITED
+    assert captured["factory_calls"] == 1
+
+
+def test_cooldown_also_blocks_mfa_and_token_restore():
+    client = FakeGarminClient(login_error=GarminConnectTooManyRequestsError("429"))
+    service, _store, _captured = build_service(client)
+    service.connect("rider@example.com", "secret", "CN")
+
+    assert service.submit_mfa("any-session", "123456").status == STATUS_RATE_LIMITED
+    assert service.restore_session(TOKEN_JSON, "CN").status == STATUS_RATE_LIMITED
+
+
+def test_successful_login_clears_cooldown():
+    client = FakeGarminClient(login_error=GarminConnectTooManyRequestsError("429"))
+    service, _store, _captured = build_service(client, cooldown_seconds=0)
+
+    service.connect("rider@example.com", "secret", "CN")
+    outcome = service.connect("rider@example.com", "secret", "CN")
+
+    # 冷却时间为 0 表示立即过期，第二次应真正重试并再次得到限流结果
+    assert outcome.status == STATUS_RATE_LIMITED
+
+
+def test_credentials_error_does_not_start_cooldown():
+    """密码错误是确定性失败，不应触发冷却。"""
+
+    client = FakeGarminClient(login_error=GarminConnectAuthenticationError("bad credentials"))
+    service, _store, captured = build_service(client)
+
+    service.connect("rider@example.com", "wrong", "CN")
+    service.connect("rider@example.com", "wrong", "CN")
+
+    assert captured["factory_calls"] == 2
 
 
 def test_connect_reports_unreachable_when_login_chain_exhausted():
