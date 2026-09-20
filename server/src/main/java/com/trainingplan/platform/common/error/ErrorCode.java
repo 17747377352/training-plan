@@ -18,6 +18,7 @@ public enum ErrorCode {
     UNAUTHORIZED(40100, "未登录或登录已失效"),
     FORBIDDEN(40300, "没有操作权限"),
     NOT_FOUND(40400, "请求的数据不存在"),
+    METHOD_NOT_ALLOWED(40500, "请求方法不支持"),
     BUSINESS_ERROR(40900, "业务处理失败"),
     USER_ALREADY_EXISTS(41001, "用户名或邮箱已被使用"),
     INVALID_CREDENTIALS(41002, "用户名或密码错误"),

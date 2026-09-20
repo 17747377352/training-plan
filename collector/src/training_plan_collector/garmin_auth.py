@@ -24,6 +24,8 @@ from garminconnect.exceptions import (
     GarminConnectTooManyRequestsError,
 )
 
+from training_plan_collector import garmin_http
+
 logger = structlog.get_logger()
 
 STATUS_CONNECTED = "CONNECTED"
@@ -141,6 +143,15 @@ class GarminAuthService:
         self._cooldown_seconds = rate_limit_cooldown_seconds
         self._cooldown_until = 0.0
         self._cooldown_lock = threading.Lock()
+        # 必须在构造任何 Garmin 客户端之前替换会话，否则 SSO 的 Cloudflare
+        # 挑战会让全部登录策略失败（详见 garmin_http 模块说明）。
+        if garmin_http.enable_cloudscraper_sessions():
+            logger.info("garmin_cloudflare_bypass_enabled")
+        else:
+            logger.warning(
+                "garmin_cloudflare_bypass_disabled",
+                reason=garmin_http.DISABLE_ENV,
+            )
 
     def connect(self, email: str, password: str, region: str) -> AuthOutcome:
         """使用凭据登录 Garmin，必要时转入 MFA 流程。"""
@@ -227,10 +238,9 @@ class GarminAuthService:
         """
 
         is_cn = region.strip().upper() == "CN"
-        cooling = self._cooldown_message()
-        if cooling is not None:
-            return SessionOutcome(STATUS_RATE_LIMITED, message=cooling)
-
+        # 注意：这里刻意不做冷却期预检。冷却期是为保护 SSO 登录端点而设的，
+        # 而令牌恢复只访问 API 层（实测 1.6 秒），不受 SSO 限流影响。
+        # 若 API 层自身被限流，下面的分支会进入冷却。
         try:
             client = self._client_factory(None, None, is_cn, False)
             client.login(tokenstore=token_json)

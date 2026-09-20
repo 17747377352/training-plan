@@ -9,6 +9,7 @@ import com.trainingplan.platform.dto.garmin.ConnectGarminMfaRequest;
 import com.trainingplan.platform.dto.garmin.ConnectGarminRequest;
 import com.trainingplan.platform.dto.garmin.GarminAccountDto;
 import com.trainingplan.platform.dto.garmin.GarminConnectResultDto;
+import com.trainingplan.platform.dto.garmin.ImportTokenRequest;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.security.TokenCipher;
@@ -337,6 +338,59 @@ class GarminAccountServiceTest {
                 .isEqualTo(ErrorCode.NOT_FOUND);
 
         verify(tokenCipher, never()).decrypt(anyLong(), anyString());
+    }
+
+    @Test
+    void shouldImportTokenAfterVerifyingIt() {
+        when(accountMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+        when(accountMapper.insert(any(GarminAccount.class))).thenAnswer(invocation -> {
+            GarminAccount account = invocation.getArgument(0);
+            account.setId(30L);
+            return 1;
+        });
+        when(authClient.verifyToken("token-json", "GLOBAL"))
+                .thenReturn(new CollectorAuthResult("CONNECTED", null, null, null));
+        when(tokenCipher.encrypt(eq(30L), anyString())).thenReturn("cipher");
+        when(accountMapper.selectById(30L)).thenReturn(activeAccount(30L));
+
+        GarminAccountDto result = garminAccountService.importToken(
+                USER_ID, new ImportTokenRequest(EMAIL, "token-json", "GLOBAL"));
+
+        assertThat(result.id()).isEqualTo(30L);
+        ArgumentCaptor<GarminAccount> captor = ArgumentCaptor.forClass(GarminAccount.class);
+        verify(accountMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getTokenCiphertext()).isEqualTo("cipher");
+        assertThat(captor.getValue().getAuthStatus()).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void shouldRejectImportWhenTokenIsInvalid() {
+        when(authClient.verifyToken("bad-token", "GLOBAL"))
+                .thenReturn(new CollectorAuthResult("TOKEN_INVALID", null, null, "Garmin 令牌已失效，需要重新认证"));
+
+        assertThatThrownBy(() -> garminAccountService.importToken(
+                USER_ID, new ImportTokenRequest(EMAIL, "bad-token", "GLOBAL")))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(ErrorCode.GARMIN_AUTH_REQUIRED);
+
+        // 无效令牌不得在库中留下记录
+        verify(accountMapper, never()).insert(any(GarminAccount.class));
+        verify(accountMapper, never()).updateById(any(GarminAccount.class));
+    }
+
+    @Test
+    void shouldReuseExistingAccountWhenReimportingToken() {
+        when(accountMapper.selectOne(any(Wrapper.class))).thenReturn(accountWithToken(31L));
+        when(authClient.verifyToken("token-json", "CN"))
+                .thenReturn(new CollectorAuthResult("CONNECTED", null, null, null));
+        when(tokenCipher.encrypt(eq(31L), anyString())).thenReturn("cipher-2");
+        when(accountMapper.selectById(31L)).thenReturn(activeAccount(31L));
+
+        garminAccountService.importToken(USER_ID, new ImportTokenRequest(EMAIL, "token-json", "CN"));
+
+        verify(accountMapper, never()).insert(any(GarminAccount.class));
+        verify(accountMapper).updateById(any(GarminAccount.class));
     }
 
     private GarminAccount accountWithToken(Long id) {

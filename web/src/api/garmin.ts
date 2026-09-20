@@ -57,6 +57,25 @@ export function verifyAccount(id: number): Promise<GarminAccount> {
   });
 }
 
+/**
+ * 导入已有 Garmin 令牌完成绑定。
+ *
+ * 用于 Garmin 对登录端点限流或要求人机验证、程序登录走不通时：
+ * 用户在浏览器侧登录后取得令牌，交给平台存储与自动刷新。
+ */
+export function importToken(form: {
+  email: string;
+  tokenJson: string;
+  region: GarminRegion;
+}): Promise<GarminAccount> {
+  return request({
+    method: "POST",
+    url: "/api/garmin/accounts/import-token",
+    data: form,
+    timeout: GARMIN_TIMEOUT,
+  });
+}
+
 export function updateAutoSync(id: number, syncEnabled: number): Promise<void> {
   return request({
     method: "PUT",

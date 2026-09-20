@@ -5,6 +5,7 @@ import { ElMessage } from "element-plus";
 import {
   connectAccount,
   deleteAccount,
+  importToken,
   listAccounts,
   submitMfa,
   updateAutoSync,
@@ -31,6 +32,14 @@ const mfaDialogVisible = ref(false);
 const mfaCode = ref("");
 const mfaSubmitting = ref(false);
 const loginSessionId = ref("");
+
+const importDialogVisible = ref(false);
+const importSubmitting = ref(false);
+const importForm = reactive({
+  email: "",
+  tokenJson: "",
+  region: "GLOBAL" as GarminRegion,
+});
 
 const STATUS_LABELS: Record<GarminAuthStatus, string> = {
   PENDING: "待认证",
@@ -134,8 +143,32 @@ function handleCancelMfa() {
   ElMessage.info("已取消验证码输入，可稍后重新连接");
 }
 
-async function handleVerify(account: GarminAccount) {
-  verifyingId.value = account.id;
+async function handleImportToken() {
+  if (importSubmitting.value) return;
+  if (!importForm.email || !importForm.tokenJson) {
+    ElMessage.warning("请填写 Garmin 邮箱与令牌内容");
+    return;
+  }
+  importSubmitting.value = true;
+  try {
+    await importToken({
+      email: importForm.email.trim(),
+      tokenJson: importForm.tokenJson.trim(),
+      region: importForm.region,
+    });
+    importDialogVisible.value = false;
+    // 令牌是凭据，导入后立即从表单里清掉
+    importForm.tokenJson = "";
+    ElMessage.success("令牌导入成功，账号已连接");
+    await loadAccounts();
+  } catch {
+    // 错误提示由拦截器统一处理
+  } finally {
+    importSubmitting.value = false;
+  }
+}
+
+async function handleVerify(account: GarminAccount) {  verifyingId.value = account.id;
   try {
     await verifyAccount(account.id);
     ElMessage.success("令牌有效，账号可正常使用");
@@ -220,8 +253,15 @@ onMounted(loadAccounts);
           >
             连接 Garmin
           </el-button>
+          <el-button @click="importDialogVisible = true">导入令牌</el-button>
         </el-form-item>
       </el-form>
+      <el-alert type="info" :closable="false" class="connect-hint">
+        <template #default>
+          Garmin 会对程序登录做限流或人机验证，此时可改用「导入令牌」：在浏览器登录
+          connect.garmin.com 后取得令牌交给平台，之后由平台自动刷新，无需重复登录。
+        </template>
+      </el-alert>
     </el-card>
 
     <el-card v-loading="loading" class="accounts-card">
@@ -319,6 +359,50 @@ onMounted(loadAccounts);
           @click="handleSubmitMfa"
         >
           提交验证码
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="importDialogVisible"
+      title="导入 Garmin 令牌"
+      width="560px"
+      :close-on-click-modal="false"
+    >
+      <el-alert type="warning" :closable="false" class="import-hint">
+        <template #default>
+          令牌等同账号凭据，只应粘贴到本机运行的服务。平台会先校验令牌可用，
+          再使用 AES-GCM 加密存储，页面不会保留粘贴内容。
+        </template>
+      </el-alert>
+      <el-form label-width="90px" @submit.prevent>
+        <el-form-item label="邮箱">
+          <el-input v-model="importForm.email" placeholder="Garmin 登录邮箱" />
+        </el-form-item>
+        <el-form-item label="站点">
+          <el-select v-model="importForm.region" style="width: 200px">
+            <el-option label="国际站（connect.garmin.com）" value="GLOBAL" />
+            <el-option label="中国区（connect.garmin.cn）" value="CN" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="令牌内容">
+          <el-input
+            v-model="importForm.tokenJson"
+            type="textarea"
+            :rows="5"
+            placeholder='{"di_token":"...","di_refresh_token":"...","di_client_id":"..."}'
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="importDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="importSubmitting"
+          :disabled="importSubmitting"
+          @click="handleImportToken"
+        >
+          校验并导入
         </el-button>
       </template>
     </el-dialog>

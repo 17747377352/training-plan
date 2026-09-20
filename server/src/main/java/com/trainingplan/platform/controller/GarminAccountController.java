@@ -7,6 +7,7 @@ import com.trainingplan.platform.dto.garmin.ConnectGarminMfaRequest;
 import com.trainingplan.platform.dto.garmin.ConnectGarminRequest;
 import com.trainingplan.platform.dto.garmin.GarminAccountDto;
 import com.trainingplan.platform.dto.garmin.GarminConnectResultDto;
+import com.trainingplan.platform.dto.garmin.ImportTokenRequest;
 import com.trainingplan.platform.dto.garmin.UpdateAutoSyncRequest;
 import com.trainingplan.platform.service.GarminAccountService;
 import jakarta.validation.Valid;
@@ -75,6 +76,19 @@ public class GarminAccountController {
     public Result<GarminConnectResultDto> submitMfa(@Valid @RequestBody ConnectGarminMfaRequest request,
                                                     @AuthenticationPrincipal Jwt jwt) {
         return Result.success(garminAccountService.submitMfa(currentUserId(jwt), request));
+    }
+
+    /**
+     * 导入已有令牌完成绑定，用于程序登录被 Garmin 限流时。
+     *
+     * @param request 令牌导入请求
+     * @param jwt     当前登录令牌
+     * @return 绑定后的账号信息
+     */
+    @PostMapping("/import-token")
+    public Result<GarminAccountDto> importToken(@Valid @RequestBody ImportTokenRequest request,
+                                                @AuthenticationPrincipal Jwt jwt) {
+        return Result.success(garminAccountService.importToken(currentUserId(jwt), request));
     }
 
     /**

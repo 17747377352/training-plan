@@ -9,6 +9,7 @@ import com.trainingplan.platform.dto.garmin.ConnectGarminMfaRequest;
 import com.trainingplan.platform.dto.garmin.ConnectGarminRequest;
 import com.trainingplan.platform.dto.garmin.GarminAccountDto;
 import com.trainingplan.platform.dto.garmin.GarminConnectResultDto;
+import com.trainingplan.platform.dto.garmin.ImportTokenRequest;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.security.TokenCipher;
@@ -136,6 +137,31 @@ public class GarminAccountServiceImpl implements GarminAccountService {
             log.info("Garmin 令牌已失效 garminAccountId={}", accountId);
         }
         throw mapFailure(result);
+    }
+
+    @Override
+    public GarminAccountDto importToken(Long userId, ImportTokenRequest request) {
+        String email = request.email().trim().toLowerCase(Locale.ROOT);
+        String region = request.region();
+        String tokenJson = request.tokenJson().trim();
+
+        // 先校验再入库：无效令牌不应该在账号列表里留下一条"已连接"的假记录。
+        CollectorAuthResult result = authClient.verifyToken(tokenJson, region);
+        if (!result.isConnected()) {
+            throw mapFailure(result);
+        }
+
+        GarminAccount account = findAccount(userId, region, email);
+        if (account == null) {
+            account = createPendingAccount(userId, region, email);
+        }
+        GarminAccount update = new GarminAccount();
+        update.setId(account.getId());
+        update.setTokenCiphertext(tokenCipher.encrypt(account.getId(), tokenJson));
+        update.setAuthStatus(STATUS_ACTIVE);
+        accountMapper.updateById(update);
+        log.info("Garmin 令牌导入成功 garminAccountId={} userId={}", account.getId(), userId);
+        return toDto(accountMapper.selectById(account.getId()));
     }
 
     @Override

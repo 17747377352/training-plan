@@ -81,6 +81,14 @@ uv run training-plan-collector
 
 Garmin 会对登录端点做 IP 级限流。一旦登录被限流或遇到 Cloudflare 人机挑战，采集器会进入冷却期（`COLLECTOR_RATE_LIMIT_COOLDOWN_SECONDS`，默认 900 秒），期间不再发起任何 Garmin 请求，接口直接返回剩余等待时间。**不要在此期间反复重试，重复尝试会延长限流。** 浏览器能正常登录 Garmin 官网并不代表程序能登录：程序必须走未认证的 SSO 端点，而浏览器可以复用会话并通过人机挑战。
 
+### Cloudflare 挑战绕过
+
+采集器在构造认证服务时会把库内部的 `requests.Session` 替换为 `cloudscraper` 会话，用于通过 Garmin SSO 上的 Cloudflare 挑战。未启用时实测 5 段登录策略全部失败（4 段 429、1 段 403 人机挑战）；启用后可用 8 秒完成登录。细节见 `collector/src/training_plan_collector/garmin_http.py`。
+
+删除令牌路径**不受冷却期影响**：令牌恢复只访问 API 层（实测 1 秒），与 SSO 限流无关。
+
+设置 `COLLECTOR_DISABLE_CLOUDFLARE_BYPASS=1` 可关闭该绕过，用于定位问题是否由它引入。注意 cloudscraper 只能处理经典的 IUAM JS 挑战，Garmin 若改用 CAPTCHA 或托管挑战则会失效——实测已遇到过一次 `CAPTCHA required (bot challenge)`。
+
 ## Garmin 账号接口
 
 以下接口都只作用于当前登录用户自己的账号：
@@ -88,6 +96,7 @@ Garmin 会对登录端点做 IP 级限流。一旦登录被限流或遇到 Cloud
 - `GET /api/garmin/accounts`：已绑定账号列表，不返回任何令牌字段。
 - `POST /api/garmin/accounts/connect`：提交 Garmin 邮箱、密码与区域（`GLOBAL` 或 `CN`）。
 - `POST /api/garmin/accounts/connect/mfa`：提交验证码完成连接。
+- `POST /api/garmin/accounts/import-token`：导入已有令牌完成绑定，用于程序登录被 Garmin 拦下时。
 - `POST /api/garmin/accounts/{id}/verify`：用已存令牌校验账号是否仍可用，失效时状态置为 `REAUTH_REQUIRED`。
 - `PUT /api/garmin/accounts/{id}/auto-sync`：启用或暂停自动同步。
 - `DELETE /api/garmin/accounts/{id}`：删除账号绑定。
@@ -95,6 +104,12 @@ Garmin 会对登录端点做 IP 级限流。一旦登录被限流或遇到 Cloud
 `connect` 返回 `status` 为 `CONNECTED` 或 `MFA_REQUIRED`；后者需带上 `loginSessionId` 调用 MFA 接口。Garmin 密码只在请求期间使用，不写数据库也不写日志。令牌使用 AES-GCM 加密后存入 `garmin_account.token_ciphertext`，密钥来自 `app.security.token-cipher-key`。
 
 网页端入口：登录后点击首页的「Garmin 账号」，或在 `/garmin` 直接打开，可在页面上完成连接、输入 MFA 验证码、校验令牌、暂停同步与删除绑定。
+
+### 令牌导入
+
+程序登录被 Garmin 限流或人机验证拦住时，用页面上的「导入令牌」：在浏览器登录 `connect.garmin.com`，取得 `{"di_token":..,"di_refresh_token":..,"di_client_id":..}` 后连同 Garmin 邮箱与站点一起提交。平台会先向采集器校验令牌可用，再使用 AES-GCM 加密存储；令牌约一年有效且由库自动刷新，无需重复登录。
+
+令牌等同账号凭据，**不要提交到 Git**。本地留存的令牌建议放在已被 `.gitignore` 忽略的 `storage/` 目录下。
 
 ## 验证认证链路
 

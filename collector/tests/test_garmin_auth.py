@@ -52,9 +52,13 @@ class FakeGarminClient:
         self.login_tokenstores: list[str | None] = []
 
     def login(self, tokenstore: str | None = None) -> tuple[str | None, object]:
+        """凭据登录与令牌恢复是两条不同路径，失败原因分别模拟。"""
+
         self.login_tokenstores.append(tokenstore)
-        if tokenstore is not None and self._restore_error is not None:
-            raise self._restore_error
+        if tokenstore is not None:
+            if self._restore_error is not None:
+                raise self._restore_error
+            return self._login_result
         if self._login_error is not None:
             raise self._login_error
         return self._login_result
@@ -244,13 +248,19 @@ def test_unreachable_starts_cooldown():
     assert captured["factory_calls"] == 1
 
 
-def test_cooldown_also_blocks_mfa_and_token_restore():
+def test_cooldown_blocks_mfa_but_not_token_restore():
+    """冷却期保护 SSO 端点；令牌恢复只走 API 层，不应被 SSO 限流连坐。"""
+
     client = FakeGarminClient(login_error=GarminConnectTooManyRequestsError("429"))
-    service, _store, _captured = build_service(client)
+    service, _store, captured = build_service(client)
     service.connect("rider@example.com", "secret", "CN")
 
     assert service.submit_mfa("any-session", "123456").status == STATUS_RATE_LIMITED
-    assert service.restore_session(TOKEN_JSON, "CN").status == STATUS_RATE_LIMITED
+
+    outcome = service.restore_session(TOKEN_JSON, "CN")
+
+    assert outcome.status == STATUS_CONNECTED
+    assert captured["factory_calls"] == 2  # 首次 connect + 一次令牌恢复
 
 
 def test_successful_login_clears_cooldown():

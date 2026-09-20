@@ -4,6 +4,7 @@ import com.trainingplan.platform.dto.garmin.ConnectGarminMfaRequest;
 import com.trainingplan.platform.dto.garmin.ConnectGarminRequest;
 import com.trainingplan.platform.dto.garmin.GarminAccountDto;
 import com.trainingplan.platform.dto.garmin.GarminConnectResultDto;
+import com.trainingplan.platform.dto.garmin.ImportTokenRequest;
 
 import java.util.List;
 
@@ -51,6 +52,18 @@ public interface GarminAccountService {
      * @return 校验后的账号信息
      */
     GarminAccountDto verifyAccount(Long userId, Long accountId);
+
+    /**
+     * 导入已有 Garmin 令牌完成绑定。
+     *
+     * <p>用于程序登录被 Garmin 限流或人机验证拦住时：先校验令牌可用，
+     * 通过后再加密入库，避免把无效令牌写进数据库。</p>
+     *
+     * @param userId  平台用户 ID
+     * @param request 导入请求
+     * @return 绑定后的账号信息
+     */
+    GarminAccountDto importToken(Long userId, ImportTokenRequest request);
 
     /**
      * 启用或暂停自动同步。
