@@ -40,3 +40,8 @@ app:
     issuer: training-plan-server
     access-token-ttl: 15m
     refresh-token-ttl: 30d
+    token-cipher-key: ${TOKEN_CIPHER_KEY:}
+  collector:
+    base-url: ${COLLECTOR_BASE_URL:http://127.0.0.1:8090}
+    service-token: ${COLLECTOR_SERVICE_TOKEN:}
+    timeout: 30s

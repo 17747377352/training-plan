@@ -34,6 +34,8 @@ class JwtConfigTest {
     private static final String SECRET = "unit-test-jwt-secret-key-with-32-plus-characters";
     private static final String ISSUER = "training-plan-server";
     private static final String OTHER_SECRET = "another-unit-test-secret-key-with-32-chars";
+    private static final String TOKEN_CIPHER_KEY =
+            java.util.Base64.getEncoder().encodeToString("0123456789abcdef0123456789abcdef".getBytes());
     private static final String TOKEN_TYPE_CLAIM = "token_type";
 
     private JwtConfig jwtConfig;
@@ -48,7 +50,7 @@ class JwtConfigTest {
     void setUp() {
         jwtConfig = new JwtConfig();
         properties = new SecurityProperties(
-                SECRET, ISSUER, Duration.ofMinutes(15), Duration.ofDays(30));
+                SECRET, ISSUER, Duration.ofMinutes(15), Duration.ofDays(30), TOKEN_CIPHER_KEY);
         SecretKey secretKey = jwtConfig.jwtSecretKey(properties);
         jwtEncoder = jwtConfig.jwtEncoder(secretKey);
         resourceServerDecoder = jwtConfig.jwtDecoder(secretKey, properties);
@@ -113,7 +115,7 @@ class JwtConfigTest {
     @Test
     void shouldRejectTokenSignedWithAnotherSecret() {
         SecretKey otherKey = jwtConfig.jwtSecretKey(new SecurityProperties(
-                OTHER_SECRET, ISSUER, Duration.ofMinutes(15), Duration.ofDays(30)));
+                OTHER_SECRET, ISSUER, Duration.ofMinutes(15), Duration.ofDays(30), TOKEN_CIPHER_KEY));
         JwtEncoder otherEncoder = jwtConfig.jwtEncoder(otherKey);
         String foreignToken = otherEncoder.encode(JwtEncoderParameters.from(
                         JwsHeader.with(MacAlgorithm.HS256).build(),
@@ -134,7 +136,7 @@ class JwtConfigTest {
     @Test
     void shouldRejectSecretShorterThan32Characters() {
         SecurityProperties weakProperties = new SecurityProperties(
-                "too-short", ISSUER, Duration.ofMinutes(15), Duration.ofDays(30));
+                "too-short", ISSUER, Duration.ofMinutes(15), Duration.ofDays(30), TOKEN_CIPHER_KEY);
 
         assertThatThrownBy(() -> jwtConfig.jwtSecretKey(weakProperties))
                 .isInstanceOf(IllegalArgumentException.class)

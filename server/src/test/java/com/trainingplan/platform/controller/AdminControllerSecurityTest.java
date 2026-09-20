@@ -49,7 +49,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.security.jwt-secret=unit-test-jwt-secret-key-with-32-plus-characters",
         "app.security.issuer=training-plan-server",
         "app.security.access-token-ttl=15m",
-        "app.security.refresh-token-ttl=30d"
+        "app.security.refresh-token-ttl=30d",
+        "app.security.token-cipher-key=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 })
 class AdminControllerSecurityTest {
 

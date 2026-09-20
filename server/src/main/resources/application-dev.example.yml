@@ -16,3 +16,14 @@ spring:
 app:
   security:
     jwt-secret: 请替换为至少32个字符的随机密钥
+    # 生成方式：openssl rand -base64 32
+    # 用于加密 Garmin Token，与 jwt-secret 相互独立，且必须妥善备份：
+    # 密钥丢失后已存储的 Garmin Token 无法解密，用户需要重新认证。
+    token-cipher-key: 请替换为openssl rand -base64 32生成的32字节Base64密钥
+
+  collector:
+    # Collector 内网地址，不对公网暴露
+    base-url: http://127.0.0.1:8090
+    # 生成方式：openssl rand -base64 32
+    # 需与 collector/.env.dev 中的 COLLECTOR_SERVER_TOKEN 保持一致
+    service-token: 请替换为服务间共享的内部凭据
