@@ -9,3 +9,17 @@ export interface SystemStatus {
   status: string;
   timestamp: string;
 }
+
+export interface AuthTokens {
+  tokenType: string;
+  accessToken: string;
+  refreshToken: string;
+  accessTokenExpiresIn: number;
+}
+
+export interface UserProfile {
+  id: number;
+  username: string;
+  email: string;
+  roles: string[];
+}

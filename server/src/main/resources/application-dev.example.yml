@@ -13,3 +13,6 @@ spring:
       timeout: 7200ms
       database: 5
 
+app:
+  security:
+    jwt-secret: 请替换为至少32个字符的随机密钥

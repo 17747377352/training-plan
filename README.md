@@ -39,10 +39,12 @@ cp collector/.env.example collector/.env.dev
 ```bash
 export JAVA_HOME=$(/usr/libexec/java_home -v 17)
 cd server
-./mvnw spring-boot:run
+./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
 健康检查：`GET http://localhost:8080/api/system/health`
+
+开发环境的 JWT 密钥需在 `application-dev.yml` 的 `app.security.jwt-secret` 中配置，长度至少 32 个字符。
 
 ## 启动前端
 
@@ -52,6 +54,8 @@ npm install
 npm run dev
 ```
 
+打开 `http://localhost:5173/register` 创建平台用户。登录后前端会携带 access token，并在过期时使用 Redis 中的一次性 refresh token 自动续期。
+
 ## 启动采集器
 
 ```bash
@@ -60,7 +64,16 @@ uv sync
 uv run training-plan-collector
 ```
 
+## 验证认证链路
+
+后端以 dev profile 运行且本地 MySQL、Redis 可用时，可执行端到端断言脚本：
+
+```bash
+bash server/scripts/verify-auth-e2e.sh
+```
+
+脚本覆盖注册、登录、令牌类型隔离、刷新轮换、并发双花、退出撤销和未认证访问，共 26 项断言，全部通过时退出码为 0。它会向本地开发库写入 `e2e` 前缀的测试用户。
+
 ## 开发状态
 
 开发进度和下一步任务记录在 [docs/开发进度.md](docs/开发进度.md)。
-

@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import { getSystemStatus } from "../api/system";
+import { useAuthStore } from "../stores/auth";
 import type { SystemStatus } from "../types/api";
 
+const authStore = useAuthStore();
+const router = useRouter();
 const loading = ref(false);
 const errorMessage = ref("");
 const systemStatus = ref<SystemStatus>();
@@ -25,14 +29,30 @@ async function loadStatus() {
   }
 }
 
-onMounted(loadStatus);
+async function handleLogout(): Promise<void> {
+  await authStore.logout();
+  await router.replace("/login");
+}
+
+onMounted(async () => {
+  await Promise.all([loadStatus(), authStore.loadProfile()]);
+});
 </script>
 
 <template>
   <section class="page-container">
-    <header class="page-heading">
-      <h1>数据管理后台</h1>
-      <p>管理 Garmin 账号、同步任务与个人训练数据。</p>
+    <header class="page-heading dashboard-heading">
+      <div>
+        <h1>数据管理后台</h1>
+        <p>管理 Garmin 账号、同步任务与个人训练数据。</p>
+      </div>
+      <div class="user-actions">
+        <div>
+          <strong>{{ authStore.profile?.username || "用户" }}</strong>
+          <span>{{ authStore.profile?.email }}</span>
+        </div>
+        <el-button @click="handleLogout">退出登录</el-button>
+      </div>
     </header>
 
     <el-card v-loading="loading" class="status-card">
