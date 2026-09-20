@@ -14,6 +14,10 @@ public record CollectorAuthResult(String status, String tokenJson, String loginS
 
     public static final String STATUS_CONNECTED = "CONNECTED";
     public static final String STATUS_MFA_REQUIRED = "MFA_REQUIRED";
+    public static final String STATUS_MFA_INVALID = "MFA_INVALID";
+    public static final String STATUS_INVALID_CREDENTIALS = "INVALID_CREDENTIALS";
+    public static final String STATUS_RATE_LIMITED = "RATE_LIMITED";
+    public static final String STATUS_FAILED = "FAILED";
 
     public boolean isConnected() {
         return STATUS_CONNECTED.equals(status);

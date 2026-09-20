@@ -30,6 +30,8 @@ public enum ErrorCode {
     GARMIN_ACCOUNT_EXISTS(46004, "该Garmin账号已绑定"),
     GARMIN_COLLECTOR_UNAVAILABLE(46005, "Garmin采集服务暂不可用"),
     GARMIN_MFA_SESSION_EXPIRED(46006, "MFA验证会话已过期，请重新连接"),
+    GARMIN_INVALID_CREDENTIALS(46007, "Garmin账号或密码错误"),
+    GARMIN_CONNECT_FAILED(46008, "连接Garmin账号失败"),
     AI_SERVICE_ERROR(47001, "AI服务调用失败"),
     AI_TIMEOUT(47002, "AI服务响应超时"),
     SYSTEM_ERROR(50000, "系统暂时不可用");

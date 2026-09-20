@@ -206,6 +206,76 @@ class GarminAccountServiceTest {
         assertThat(accounts.get(0).authStatus()).isEqualTo("ACTIVE");
     }
 
+    @Test
+    void shouldMapCollectorInvalidCredentials() {
+        when(accountMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+        when(accountMapper.insert(any(GarminAccount.class))).thenAnswer(invocation -> {
+            GarminAccount account = invocation.getArgument(0);
+            account.setId(15L);
+            return 1;
+        });
+        when(authClient.connect(EMAIL, "wrong", "CN"))
+                .thenReturn(new CollectorAuthResult("INVALID_CREDENTIALS", null, null, "Garmin 账号或密码错误"));
+
+        assertThatThrownBy(() -> garminAccountService.connect(
+                USER_ID, new ConnectGarminRequest(EMAIL, "wrong", "CN")))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(ErrorCode.GARMIN_INVALID_CREDENTIALS);
+    }
+
+    @Test
+    void shouldMapCollectorRateLimit() {
+        when(accountMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+        when(accountMapper.insert(any(GarminAccount.class))).thenAnswer(invocation -> {
+            GarminAccount account = invocation.getArgument(0);
+            account.setId(16L);
+            return 1;
+        });
+        when(authClient.connect(EMAIL, "secret", "CN"))
+                .thenReturn(new CollectorAuthResult("RATE_LIMITED", null, null, null));
+
+        assertThatThrownBy(() -> garminAccountService.connect(
+                USER_ID, new ConnectGarminRequest(EMAIL, "secret", "CN")))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(ErrorCode.GARMIN_RATE_LIMITED);
+    }
+
+    @Test
+    void shouldCleanUpPlaceholderAccountWhenConnectFails() {
+        when(accountMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+        when(accountMapper.insert(any(GarminAccount.class))).thenAnswer(invocation -> {
+            GarminAccount account = invocation.getArgument(0);
+            account.setId(17L);
+            return 1;
+        });
+        when(authClient.connect(EMAIL, "wrong", "CN"))
+                .thenReturn(new CollectorAuthResult("INVALID_CREDENTIALS", null, null, null));
+
+        assertThatThrownBy(() -> garminAccountService.connect(
+                USER_ID, new ConnectGarminRequest(EMAIL, "wrong", "CN")))
+                .isInstanceOf(BusinessException.class);
+
+        verify(accountMapper).deleteById(17L);
+    }
+
+    @Test
+    void shouldKeepAccountWhenMfaIsPending() {
+        when(accountMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+        when(accountMapper.insert(any(GarminAccount.class))).thenAnswer(invocation -> {
+            GarminAccount account = invocation.getArgument(0);
+            account.setId(18L);
+            return 1;
+        });
+        when(authClient.connect(EMAIL, "secret", "CN"))
+                .thenReturn(new CollectorAuthResult("MFA_REQUIRED", null, "session-xyz", null));
+
+        garminAccountService.connect(USER_ID, new ConnectGarminRequest(EMAIL, "secret", "CN"));
+
+        verify(accountMapper, never()).deleteById(anyLong());
+    }
+
     private GarminAccount activeAccount(Long id) {
         GarminAccount account = new GarminAccount();
         account.setId(id);

@@ -22,3 +22,7 @@ class CollectorSettings(BaseSettings):
     task_queue: str = "training-plan:sync:jobs"
     server_base_url: str = "http://127.0.0.1:8080"
     server_token: SecretStr | None = None
+    internal_host: str = "127.0.0.1"
+    internal_port: int = 8090
+    mfa_session_ttl_seconds: int = 600
+    mfa_session_max: int = 100

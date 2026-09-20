@@ -73,12 +73,22 @@ public class GarminAccountServiceImpl implements GarminAccountService {
         if (account != null && STATUS_ACTIVE.equals(account.getAuthStatus())) {
             throw new BusinessException(ErrorCode.GARMIN_ACCOUNT_EXISTS);
         }
+        boolean created = false;
         if (account == null) {
             account = createPendingAccount(userId, region, email);
+            created = true;
         }
 
-        CollectorAuthResult result = authClient.connect(email, request.password(), region);
-        return handleAuthResult(userId, account, result);
+        try {
+            CollectorAuthResult result = authClient.connect(email, request.password(), region);
+            return handleAuthResult(userId, account, result);
+        } catch (BusinessException exception) {
+            // 认证失败时清理本次新建的占位记录，避免账号列表里留下从未绑定成功的幽灵账号。
+            if (created) {
+                accountMapper.deleteById(account.getId());
+            }
+            throw exception;
+        }
     }
 
     @Override
@@ -146,7 +156,7 @@ public class GarminAccountServiceImpl implements GarminAccountService {
             return GarminConnectResultDto.mfaRequired(loginSessionId);
         }
         if (!result.isConnected() || !StringUtils.hasText(result.tokenJson())) {
-            throw new BusinessException(ErrorCode.GARMIN_AUTH_REQUIRED);
+            throw mapFailure(result);
         }
         GarminAccount update = new GarminAccount();
         update.setId(account.getId());
@@ -157,8 +167,28 @@ public class GarminAccountServiceImpl implements GarminAccountService {
         return GarminConnectResultDto.connected(toDto(accountMapper.selectById(account.getId())));
     }
 
-    private void markPendingMfa(GarminAccount account) {
-        if (STATUS_PENDING_MFA.equals(account.getAuthStatus())) {
+    /**
+     * 把 Collector 的失败状态映射为平台错误码，只透出已脱敏的提示。
+     *
+     * @param result Collector 认证结果
+     * @return 可直接抛出的业务异常
+     */
+    private BusinessException mapFailure(CollectorAuthResult result) {
+        String message = StringUtils.hasText(result.message()) ? result.message() : null;
+        return switch (result.status() == null ? "" : result.status()) {
+            case CollectorAuthResult.STATUS_INVALID_CREDENTIALS ->
+                    new BusinessException(ErrorCode.GARMIN_INVALID_CREDENTIALS);
+            case CollectorAuthResult.STATUS_RATE_LIMITED ->
+                    new BusinessException(ErrorCode.GARMIN_RATE_LIMITED);
+            case CollectorAuthResult.STATUS_MFA_INVALID ->
+                    new BusinessException(ErrorCode.GARMIN_AUTH_REQUIRED,
+                            message == null ? ErrorCode.GARMIN_AUTH_REQUIRED.getMessage() : message);
+            default -> new BusinessException(ErrorCode.GARMIN_CONNECT_FAILED,
+                    message == null ? ErrorCode.GARMIN_CONNECT_FAILED.getMessage() : message);
+        };
+    }
+
+    private void markPendingMfa(GarminAccount account) {        if (STATUS_PENDING_MFA.equals(account.getAuthStatus())) {
             return;
         }
         GarminAccount update = new GarminAccount();
