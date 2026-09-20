@@ -18,6 +18,7 @@ public record CollectorAuthResult(String status, String tokenJson, String loginS
     public static final String STATUS_INVALID_CREDENTIALS = "INVALID_CREDENTIALS";
     public static final String STATUS_TOKEN_INVALID = "TOKEN_INVALID";
     public static final String STATUS_RATE_LIMITED = "RATE_LIMITED";
+    public static final String STATUS_UNREACHABLE = "UNREACHABLE";
     public static final String STATUS_FAILED = "FAILED";
 
     public boolean isConnected() {

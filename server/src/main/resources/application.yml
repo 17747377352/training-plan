@@ -44,4 +44,6 @@ app:
   collector:
     base-url: ${COLLECTOR_BASE_URL:http://127.0.0.1:8090}
     service-token: ${COLLECTOR_SERVICE_TOKEN:}
-    timeout: 30s
+    # Garmin 国际站登录实测约 30 秒（库内部会依次尝试多段登录策略），
+    # 超时必须显著大于该值，否则会把"Garmin 慢"误报成"采集服务不可用"。
+    timeout: 120s

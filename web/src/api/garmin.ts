@@ -11,6 +11,15 @@ export interface ConnectGarminForm {
   region: GarminRegion;
 }
 
+/**
+ * Garmin 登录链路的超时时间。
+ *
+ * 官方库会依次尝试多段登录策略，实测国际站一次登录约 30 秒，
+ * 因此这里必须明显大于后端调用采集器的超时（当前 120 秒），
+ * 否则最外层先超时，会把"Garmin 慢"显示成前端请求超时。
+ */
+const GARMIN_TIMEOUT = 150_000;
+
 export function listAccounts(): Promise<GarminAccount[]> {
   return request({ method: "GET", url: "/api/garmin/accounts" });
 }
@@ -19,7 +28,12 @@ export function listAccounts(): Promise<GarminAccount[]> {
 export function connectAccount(
   form: ConnectGarminForm,
 ): Promise<GarminConnectResult> {
-  return request({ method: "POST", url: "/api/garmin/accounts/connect", data: form });
+  return request({
+    method: "POST",
+    url: "/api/garmin/accounts/connect",
+    data: form,
+    timeout: GARMIN_TIMEOUT,
+  });
 }
 
 export function submitMfa(
@@ -30,12 +44,17 @@ export function submitMfa(
     method: "POST",
     url: "/api/garmin/accounts/connect/mfa",
     data: { loginSessionId, mfaCode },
+    timeout: GARMIN_TIMEOUT,
   });
 }
 
 /** 用已存令牌校验账号是否仍然可用。 */
 export function verifyAccount(id: number): Promise<GarminAccount> {
-  return request({ method: "POST", url: `/api/garmin/accounts/${id}/verify` });
+  return request({
+    method: "POST",
+    url: `/api/garmin/accounts/${id}/verify`,
+    timeout: GARMIN_TIMEOUT,
+  });
 }
 
 export function updateAutoSync(id: number, syncEnabled: number): Promise<void> {

@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
@@ -69,6 +70,10 @@ public class RestGarminAuthClient implements GarminAuthClient {
             }
             return new CollectorAuthResult(
                     response.status(), response.tokenJson(), response.loginSessionId(), response.message());
+        } catch (ResourceAccessException exception) {
+            // 读写超时说明 Collector 还在等 Garmin 返回，不能报"采集服务不可用"误导排查方向。
+            log.error("调用 Collector 认证接口超时 path={}", path);
+            throw new BusinessException(ErrorCode.GARMIN_CONNECT_TIMEOUT);
         } catch (RestClientException exception) {
             log.error("调用 Collector 认证接口失败 path={} 异常类型={}", path, exception.getClass().getSimpleName());
             throw new BusinessException(ErrorCode.GARMIN_COLLECTOR_UNAVAILABLE);

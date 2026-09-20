@@ -208,6 +208,9 @@ public class GarminAccountServiceImpl implements GarminAccountService {
             case CollectorAuthResult.STATUS_TOKEN_INVALID ->
                     new BusinessException(ErrorCode.GARMIN_AUTH_REQUIRED,
                             message == null ? ErrorCode.GARMIN_AUTH_REQUIRED.getMessage() : message);
+            case CollectorAuthResult.STATUS_UNREACHABLE ->
+                    new BusinessException(ErrorCode.GARMIN_CONNECT_FAILED,
+                            message == null ? ErrorCode.GARMIN_CONNECT_FAILED.getMessage() : message);
             default -> new BusinessException(ErrorCode.GARMIN_CONNECT_FAILED,
                     message == null ? ErrorCode.GARMIN_CONNECT_FAILED.getMessage() : message);
         };

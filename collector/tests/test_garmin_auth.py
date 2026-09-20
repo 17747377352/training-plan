@@ -3,6 +3,7 @@
 import pytest
 from garminconnect.exceptions import (
     GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
     GarminConnectTooManyRequestsError,
 )
 
@@ -14,6 +15,7 @@ from training_plan_collector.garmin_auth import (
     STATUS_MFA_REQUIRED,
     STATUS_RATE_LIMITED,
     STATUS_TOKEN_INVALID,
+    STATUS_UNREACHABLE,
     GarminAuthService,
     MfaSessionStore,
 )
@@ -202,6 +204,34 @@ def test_region_is_case_insensitive(region: str):
     service.connect("rider@example.com", "secret", region)
 
     assert captured["is_cn"] is True
+
+
+def test_connect_reports_unreachable_when_login_chain_exhausted():
+    """登录链全部失败（网络或风控）应与密码错误区分开。"""
+
+    client = FakeGarminClient(
+        login_error=GarminConnectConnectionError(
+            "All login strategies exhausted: 429 Too Many Requests"
+        )
+    )
+    service, _store, _captured = build_service(client)
+
+    outcome = service.connect("rider@example.com", "secret", "GLOBAL")
+
+    assert outcome.status == STATUS_UNREACHABLE
+    assert "429" not in (outcome.message or "")
+
+
+def test_restore_session_reports_unreachable():
+    client = FakeGarminClient(
+        restore_error=GarminConnectConnectionError("All login strategies exhausted")
+    )
+    service, _store, _captured = build_service(client)
+
+    outcome = service.restore_session(TOKEN_JSON, "GLOBAL")
+
+    assert outcome.status == STATUS_UNREACHABLE
+    assert outcome.client is None
 
 
 def test_restore_session_uses_token_without_credentials():

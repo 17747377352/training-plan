@@ -19,6 +19,7 @@ import structlog
 from garminconnect import Garmin
 from garminconnect.exceptions import (
     GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
     GarminConnectTooManyRequestsError,
 )
 
@@ -30,9 +31,13 @@ STATUS_MFA_INVALID = "MFA_INVALID"
 STATUS_INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
 STATUS_TOKEN_INVALID = "TOKEN_INVALID"
 STATUS_RATE_LIMITED = "RATE_LIMITED"
+STATUS_UNREACHABLE = "UNREACHABLE"
 STATUS_FAILED = "FAILED"
 
 MFA_REQUIRED_FLAG = "needs_mfa"
+
+# 异常信息只截断记录，用于区分超时、限流和被风控，不记录任何凭据。
+_ERROR_TEXT_LIMIT = 240
 
 ClientFactory = Callable[..., Any]
 
@@ -134,12 +139,31 @@ class GarminAuthService:
         try:
             client = self._client_factory(email, password, is_cn, True)
             first, second = client.login()
-        except GarminConnectTooManyRequestsError:
-            return AuthOutcome(STATUS_RATE_LIMITED, message="Garmin 请求过于频繁，请稍后再试")
+        except GarminConnectTooManyRequestsError as exception:
+            logger.warning(
+                "garmin_connect_rate_limited",
+                error_text=_truncate(exception),
+            )
+            return AuthOutcome(STATUS_RATE_LIMITED, message="Garmin 请求过于频繁，请稍后重试")
         except GarminConnectAuthenticationError:
             return AuthOutcome(STATUS_INVALID_CREDENTIALS, message="Garmin 账号或密码错误")
+        except GarminConnectConnectionError as exception:
+            # 官方库的 5 段式登录链全部失败时会走到这里。常见原因是网络到不了
+            # Garmin 登录站点，或该 IP 被风控（HTML 挑战），并非密码错误。
+            logger.warning(
+                "garmin_connect_unreachable",
+                error_text=_truncate(exception),
+            )
+            return AuthOutcome(
+                STATUS_UNREACHABLE,
+                message="无法连接 Garmin 登录服务器，请检查网络后重试",
+            )
         except Exception as exception:  # noqa: BLE001 - 任何异常都不应把细节回传
-            logger.warning("garmin_connect_failed", error_type=type(exception).__name__)
+            logger.warning(
+                "garmin_connect_failed",
+                error_type=type(exception).__name__,
+                error_text=_truncate(exception),
+            )
             return AuthOutcome(STATUS_FAILED, message="连接 Garmin 失败，请稍后重试")
 
         if first == MFA_REQUIRED_FLAG:
@@ -180,13 +204,24 @@ class GarminAuthService:
         try:
             client = self._client_factory(None, None, is_cn, False)
             client.login(tokenstore=token_json)
-        except GarminConnectTooManyRequestsError:
-            return SessionOutcome(STATUS_RATE_LIMITED, message="Garmin 请求过于频繁，请稍后再试")
+        except GarminConnectTooManyRequestsError as exception:
+            logger.warning("garmin_token_restore_rate_limited", error_text=_truncate(exception))
+            return SessionOutcome(STATUS_RATE_LIMITED, message="Garmin 请求过于频繁，请稍后重试")
         except GarminConnectAuthenticationError:
             logger.info("garmin_token_rejected")
             return SessionOutcome(STATUS_TOKEN_INVALID, message="Garmin 令牌已失效，需要重新认证")
+        except GarminConnectConnectionError as exception:
+            logger.warning("garmin_token_restore_unreachable", error_text=_truncate(exception))
+            return SessionOutcome(
+                STATUS_UNREACHABLE,
+                message="无法连接 Garmin 服务器，请检查网络后重试",
+            )
         except Exception as exception:  # noqa: BLE001
-            logger.warning("garmin_token_restore_failed", error_type=type(exception).__name__)
+            logger.warning(
+                "garmin_token_restore_failed",
+                error_type=type(exception).__name__,
+                error_text=_truncate(exception),
+            )
             return SessionOutcome(STATUS_FAILED, message="Garmin 令牌校验失败")
         logger.info("garmin_token_restored")
         return SessionOutcome(STATUS_CONNECTED, client=client)
@@ -207,3 +242,9 @@ def _default_client_factory(email: str, password: str, is_cn: bool, return_on_mf
     """构造真实的 Garmin 客户端，测试中会被替换。"""
 
     return Garmin(email=email, password=password, is_cn=is_cn, return_on_mfa=return_on_mfa)
+
+
+def _truncate(exception: BaseException) -> str:
+    """截断异常文本用于日志，避免超长或意外的内容进入日志。"""
+
+    return str(exception)[:_ERROR_TEXT_LIMIT]
