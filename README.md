@@ -72,7 +72,24 @@ uv run training-plan-collector
 bash server/scripts/verify-auth-e2e.sh
 ```
 
-脚本覆盖注册、登录、令牌类型隔离、刷新轮换、并发双花、退出撤销和未认证访问，共 26 项断言，全部通过时退出码为 0。它会向本地开发库写入 `e2e` 前缀的测试用户。
+脚本覆盖注册、登录、令牌类型隔离、刷新轮换、并发双花、退出撤销、管理员接口授权边界和未认证访问，共 30 项断言，全部通过时退出码为 0。它会向本地开发库写入 `e2e` 前缀的测试用户。
+
+## 管理员接口
+
+`/api/admin/**` 仅对 `ADMIN` 角色开放，普通用户访问返回 403：
+
+- `GET /api/admin/users`：分页查询平台用户，支持 `page`、`size`、`keyword`、`status` 参数。
+- `PUT /api/admin/users/{id}/status`：启用或禁用用户，`status` 取 0 或 1。
+
+注册接口只会分配 `USER` 角色，平台不提供创建管理员的接口，首个管理员需在数据库中人工授予：
+
+```sql
+INSERT INTO sys_user_role (user_id, role_id)
+SELECT u.id, r.id FROM sys_user u, sys_role r
+WHERE u.username = '<用户名>' AND r.role_code = 'ADMIN';
+```
+
+用户被禁用后无法登录、无法续期，但已签发的 access token 在最长 15 分钟内仍可通过签名校验。
 
 ## 开发状态
 

@@ -1,6 +1,7 @@
 package com.trainingplan.platform.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.trainingplan.platform.dto.admin.UserRoleCodeRow;
 import com.trainingplan.platform.entity.SysRole;
 import org.apache.ibatis.annotations.Param;
 
@@ -21,4 +22,12 @@ public interface SysRoleMapper extends BaseMapper<SysRole> {
      * @return 角色编码列表
      */
     List<String> selectRoleCodesByUserId(@Param("userId") Long userId);
+
+    /**
+     * 批量查询多个用户的角色编码，用于装配用户列表。
+     *
+     * @param userIds 用户 ID 列表，调用方需保证非空
+     * @return 用户与角色编码的关联行
+     */
+    List<UserRoleCodeRow> selectRoleCodesByUserIds(@Param("userIds") List<Long> userIds);
 }

@@ -160,6 +160,18 @@ assert_eq "并发使用同一 refresh token 只有一次换发成功" "1" "$(gre
 assert_eq "并发的另一次请求被拒绝（41004）" "1" "$(grep -c '^41004$' <<<"$CONCURRENT_CODES")"
 
 echo
+echo "[8] 管理员接口授权边界"
+request GET /api/admin/users
+assert_eq "未携带令牌访问管理员接口返回 401" "401" "$STATUS"
+
+request GET /api/admin/users "" "$ACCESS_TOKEN"
+assert_eq "普通用户访问管理员用户列表返回 403" "403" "$STATUS"
+assert_eq "无权限业务码为 40300" "40300" "$(jq -r '.code' <<<"$BODY")"
+
+request PUT /api/admin/users/1/status "{\"status\":0}" "$ACCESS_TOKEN"
+assert_eq "普通用户不能修改他人状态（403）" "403" "$STATUS"
+
+echo
 echo "--------------------------------------------"
 if [ "$FAILED" -eq 0 ]; then
     green "全部通过：$PASSED 项断言"

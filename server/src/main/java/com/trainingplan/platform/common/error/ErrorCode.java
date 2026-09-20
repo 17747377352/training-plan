@@ -23,6 +23,7 @@ public enum ErrorCode {
     INVALID_CREDENTIALS(41002, "用户名或密码错误"),
     ACCOUNT_DISABLED(41003, "账号已被禁用"),
     INVALID_REFRESH_TOKEN(41004, "刷新令牌无效或已过期"),
+    CANNOT_DISABLE_SELF(41005, "不能禁用当前登录的管理员账号"),
     GARMIN_AUTH_REQUIRED(46001, "Garmin账号需要重新认证"),
     GARMIN_RATE_LIMITED(46002, "Garmin接口请求过于频繁"),
     GARMIN_SYNC_ERROR(46003, "Garmin数据同步失败"),
