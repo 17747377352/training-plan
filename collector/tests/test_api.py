@@ -6,9 +6,11 @@ from training_plan_collector.api import create_app
 from training_plan_collector.garmin_auth import (
     STATUS_CONNECTED,
     STATUS_MFA_REQUIRED,
+    STATUS_TOKEN_INVALID,
     AuthOutcome,
     GarminAuthService,
     MfaSessionStore,
+    SessionOutcome,
 )
 from training_plan_collector.settings import CollectorSettings
 
@@ -23,11 +25,14 @@ class StubAuthService(GarminAuthService):
         self,
         connect_outcome: AuthOutcome,
         mfa_outcome: AuthOutcome | None = None,
+        verify_outcome: SessionOutcome | None = None,
     ) -> None:
         self._connect_outcome = connect_outcome
         self._mfa_outcome = mfa_outcome or connect_outcome
+        self._verify_outcome = verify_outcome or SessionOutcome(STATUS_CONNECTED)
         self.connect_calls: list[tuple[str, str, str]] = []
         self.mfa_calls: list[tuple[str, str]] = []
+        self.verify_calls: list[tuple[str, str]] = []
 
     def connect(self, email: str, password: str, region: str) -> AuthOutcome:
         self.connect_calls.append((email, password, region))
@@ -36,6 +41,10 @@ class StubAuthService(GarminAuthService):
     def submit_mfa(self, login_session_id: str, mfa_code: str) -> AuthOutcome:
         self.mfa_calls.append((login_session_id, mfa_code))
         return self._mfa_outcome
+
+    def restore_session(self, token_json: str, region: str) -> SessionOutcome:
+        self.verify_calls.append((token_json, region))
+        return self._verify_outcome
 
 
 def build_client(auth_service: StubAuthService, server_token: str | None = TOKEN) -> TestClient:
@@ -160,3 +169,50 @@ def test_real_service_wires_session_store():
 
     assert client.get("/health").status_code == 200
     assert store.size() == 0
+
+
+def test_verify_token_requires_service_token():
+    client = build_client(StubAuthService(AuthOutcome(STATUS_CONNECTED)))
+
+    response = client.post(
+        "/internal/garmin/verify-token",
+        json={"tokenJson": '{"di_token":"t"}', "region": "CN"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_verify_token_returns_connected_status():
+    service = StubAuthService(AuthOutcome(STATUS_CONNECTED))
+    client = build_client(service)
+
+    response = client.post(
+        "/internal/garmin/verify-token",
+        headers=HEADERS,
+        json={"tokenJson": '{"di_token":"t"}', "region": "CN"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == STATUS_CONNECTED
+    assert service.verify_calls == [('{"di_token":"t"}', "CN")]
+
+
+def test_verify_token_reports_invalid_token():
+    service = StubAuthService(
+        AuthOutcome(STATUS_CONNECTED),
+        verify_outcome=SessionOutcome(
+            STATUS_TOKEN_INVALID, message="Garmin 令牌已失效，需要重新认证"
+        ),
+    )
+    client = build_client(service)
+
+    response = client.post(
+        "/internal/garmin/verify-token",
+        headers=HEADERS,
+        json={"tokenJson": '{"di_token":"t"}', "region": "GLOBAL"},
+    )
+
+    body = response.json()
+    assert body["status"] == STATUS_TOKEN_INVALID
+    assert body["tokenJson"] is None
+    assert "重新认证" in body["message"]

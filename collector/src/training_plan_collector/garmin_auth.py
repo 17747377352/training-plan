@@ -28,6 +28,7 @@ STATUS_CONNECTED = "CONNECTED"
 STATUS_MFA_REQUIRED = "MFA_REQUIRED"
 STATUS_MFA_INVALID = "MFA_INVALID"
 STATUS_INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
+STATUS_TOKEN_INVALID = "TOKEN_INVALID"
 STATUS_RATE_LIMITED = "RATE_LIMITED"
 STATUS_FAILED = "FAILED"
 
@@ -43,6 +44,18 @@ class AuthOutcome:
     status: str
     token_json: str | None = None
     login_session_id: str | None = None
+    message: str | None = None
+
+
+@dataclass(frozen=True)
+class SessionOutcome:
+    """用已存令牌恢复会话的结果。
+
+    ``client`` 只在 ``CONNECTED`` 时有值，调用方应通过只读代理使用它。
+    """
+
+    status: str
+    client: Any | None = None
     message: str | None = None
 
 
@@ -156,6 +169,27 @@ class GarminAuthService:
 
         self._sessions.drop(login_session_id)
         return self._connected(client)
+
+    def restore_session(self, token_json: str, region: str) -> SessionOutcome:
+        """用已存令牌恢复会话，不需要重新输入密码。
+
+        令牌失效时返回 ``TOKEN_INVALID``，平台据此把账号标记为需要重新认证。
+        """
+
+        is_cn = region.strip().upper() == "CN"
+        try:
+            client = self._client_factory(None, None, is_cn, False)
+            client.login(tokenstore=token_json)
+        except GarminConnectTooManyRequestsError:
+            return SessionOutcome(STATUS_RATE_LIMITED, message="Garmin 请求过于频繁，请稍后再试")
+        except GarminConnectAuthenticationError:
+            logger.info("garmin_token_rejected")
+            return SessionOutcome(STATUS_TOKEN_INVALID, message="Garmin 令牌已失效，需要重新认证")
+        except Exception as exception:  # noqa: BLE001
+            logger.warning("garmin_token_restore_failed", error_type=type(exception).__name__)
+            return SessionOutcome(STATUS_FAILED, message="Garmin 令牌校验失败")
+        logger.info("garmin_token_restored")
+        return SessionOutcome(STATUS_CONNECTED, client=client)
 
     def _connected(self, client: Any) -> AuthOutcome:
         """导出 Token JSON。调用方负责加密存储，日志中不得出现该值。"""

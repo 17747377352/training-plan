@@ -78,6 +78,19 @@ public class GarminAccountController {
     }
 
     /**
+     * 用已存令牌校验账号是否仍然可用。
+     *
+     * @param id  账号 ID
+     * @param jwt 当前登录令牌
+     * @return 校验后的账号信息
+     */
+    @PostMapping("/{id}/verify")
+    public Result<GarminAccountDto> verifyAccount(@PathVariable Long id,
+                                                  @AuthenticationPrincipal Jwt jwt) {
+        return Result.success(garminAccountService.verifyAccount(currentUserId(jwt), id));
+    }
+
+    /**
      * 启用或暂停账号自动同步。
      *
      * @param id      账号 ID

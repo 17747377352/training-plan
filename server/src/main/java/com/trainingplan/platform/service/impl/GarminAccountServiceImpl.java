@@ -48,6 +48,7 @@ public class GarminAccountServiceImpl implements GarminAccountService {
     private static final String STATUS_PENDING = "PENDING";
     private static final String STATUS_PENDING_MFA = "PENDING_MFA";
     private static final String STATUS_ACTIVE = "ACTIVE";
+    private static final String STATUS_REAUTH_REQUIRED = "REAUTH_REQUIRED";
     private static final int SYNC_ENABLED = 1;
 
     private final GarminAccountMapper accountMapper;
@@ -117,6 +118,27 @@ public class GarminAccountServiceImpl implements GarminAccountService {
     }
 
     @Override
+    public GarminAccountDto verifyAccount(Long userId, Long accountId) {
+        GarminAccount account = requireOwnedAccount(userId, accountId);
+        if (!StringUtils.hasText(account.getTokenCiphertext())) {
+            throw new BusinessException(ErrorCode.GARMIN_AUTH_REQUIRED, "Garmin账号尚未完成绑定");
+        }
+        String tokenJson = tokenCipher.decrypt(account.getId(), account.getTokenCiphertext());
+        CollectorAuthResult result = authClient.verifyToken(tokenJson, account.getRegion());
+        if (result.isConnected()) {
+            updateAuthStatus(account.getId(), STATUS_ACTIVE);
+            log.info("Garmin 令牌校验通过 garminAccountId={}", accountId);
+            return toDto(accountMapper.selectById(account.getId()));
+        }
+        if (CollectorAuthResult.STATUS_TOKEN_INVALID.equals(result.status())) {
+            // 令牌已失效：先落状态再报错，前端刷新列表即可看到需要重新认证。
+            updateAuthStatus(account.getId(), STATUS_REAUTH_REQUIRED);
+            log.info("Garmin 令牌已失效 garminAccountId={}", accountId);
+        }
+        throw mapFailure(result);
+    }
+
+    @Override
     public void updateAutoSync(Long userId, Long accountId, Integer syncEnabled) {
         GarminAccount account = requireOwnedAccount(userId, accountId);
         GarminAccount update = new GarminAccount();
@@ -183,17 +205,30 @@ public class GarminAccountServiceImpl implements GarminAccountService {
             case CollectorAuthResult.STATUS_MFA_INVALID ->
                     new BusinessException(ErrorCode.GARMIN_AUTH_REQUIRED,
                             message == null ? ErrorCode.GARMIN_AUTH_REQUIRED.getMessage() : message);
+            case CollectorAuthResult.STATUS_TOKEN_INVALID ->
+                    new BusinessException(ErrorCode.GARMIN_AUTH_REQUIRED,
+                            message == null ? ErrorCode.GARMIN_AUTH_REQUIRED.getMessage() : message);
             default -> new BusinessException(ErrorCode.GARMIN_CONNECT_FAILED,
                     message == null ? ErrorCode.GARMIN_CONNECT_FAILED.getMessage() : message);
         };
     }
 
-    private void markPendingMfa(GarminAccount account) {        if (STATUS_PENDING_MFA.equals(account.getAuthStatus())) {
-            return;
+    private void markPendingMfa(GarminAccount account) {
+        if (!STATUS_PENDING_MFA.equals(account.getAuthStatus())) {
+            updateAuthStatus(account.getId(), STATUS_PENDING_MFA);
         }
+    }
+
+    /**
+     * 更新账号认证状态。
+     *
+     * @param accountId Garmin 账号 ID
+     * @param status    目标认证状态
+     */
+    private void updateAuthStatus(Long accountId, String status) {
         GarminAccount update = new GarminAccount();
-        update.setId(account.getId());
-        update.setAuthStatus(STATUS_PENDING_MFA);
+        update.setId(accountId);
+        update.setAuthStatus(status);
         accountMapper.updateById(update);
     }
 

@@ -28,4 +28,13 @@ public interface GarminAuthClient {
      * @return 认证结果
      */
     CollectorAuthResult submitMfa(String loginSessionId, String mfaCode);
+
+    /**
+     * 用已存令牌恢复会话，验证令牌是否仍然有效。
+     *
+     * @param tokenJson 平台解密后的 Garmin Token
+     * @param region    站点区域：GLOBAL 或 CN
+     * @return 认证结果，令牌失效时状态为 TOKEN_INVALID
+     */
+    CollectorAuthResult verifyToken(String tokenJson, String region);
 }

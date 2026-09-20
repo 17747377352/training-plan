@@ -21,6 +21,11 @@ const router = createRouter({
       component: () => import("../views/RegisterView.vue"),
       meta: { public: true },
     },
+    {
+      path: "/garmin",
+      name: "garmin",
+      component: () => import("../views/GarminAccountsView.vue"),
+    },
   ],
 });
 

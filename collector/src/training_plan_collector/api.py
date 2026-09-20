@@ -34,6 +34,13 @@ class MfaRequest(BaseModel):
     mfaCode: str = Field(min_length=1, max_length=16)
 
 
+class VerifyTokenRequest(BaseModel):
+    """用已存令牌恢复会话的请求。令牌来自平台解密，不落盘。"""
+
+    tokenJson: str = Field(min_length=1, max_length=8192)
+    region: str = Field(pattern="^(GLOBAL|CN)$")
+
+
 class AuthResponse(BaseModel):
     """认证结果。tokenJson 只在 CONNECTED 时出现。"""
 
@@ -100,6 +107,17 @@ def create_app(
 
         outcome = resolved_service.submit_mfa(request.loginSessionId, request.mfaCode)
         return _to_response(outcome)
+
+    @app.post(
+        "/internal/garmin/verify-token",
+        response_model=AuthResponse,
+        dependencies=[Depends(require_service_token)],
+    )
+    def verify_token(request: VerifyTokenRequest) -> AuthResponse:
+        """用已存令牌恢复会话，令牌失效时返回 TOKEN_INVALID。"""
+
+        outcome = resolved_service.restore_session(request.tokenJson, request.region)
+        return AuthResponse(status=outcome.status, message=outcome.message)
 
     return app
 

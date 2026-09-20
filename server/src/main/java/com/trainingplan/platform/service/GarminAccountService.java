@@ -42,6 +42,17 @@ public interface GarminAccountService {
     GarminConnectResultDto submitMfa(Long userId, ConnectGarminMfaRequest request);
 
     /**
+     * 用已存令牌验证账号是否仍然可用。
+     *
+     * <p>令牌失效时会把账号标记为 {@code REAUTH_REQUIRED} 并抛出需要重新认证的错误。</p>
+     *
+     * @param userId    平台用户 ID
+     * @param accountId Garmin 账号 ID
+     * @return 校验后的账号信息
+     */
+    GarminAccountDto verifyAccount(Long userId, Long accountId);
+
+    /**
      * 启用或暂停自动同步。
      *
      * @param userId      平台用户 ID

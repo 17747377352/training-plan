@@ -276,6 +276,75 @@ class GarminAccountServiceTest {
         verify(accountMapper, never()).deleteById(anyLong());
     }
 
+    @Test
+    void shouldKeepAccountActiveWhenTokenIsStillValid() {
+        GarminAccount account = accountWithToken(20L);
+        when(accountMapper.selectById(20L)).thenReturn(account);
+        when(tokenCipher.decrypt(20L, "stored-cipher")).thenReturn("token-json");
+        when(authClient.verifyToken("token-json", "CN"))
+                .thenReturn(new CollectorAuthResult("CONNECTED", null, null, null));
+
+        GarminAccountDto result = garminAccountService.verifyAccount(USER_ID, 20L);
+
+        assertThat(result.id()).isEqualTo(20L);
+        ArgumentCaptor<GarminAccount> captor = ArgumentCaptor.forClass(GarminAccount.class);
+        verify(accountMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getAuthStatus()).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void shouldMarkReauthRequiredWhenTokenIsRejected() {
+        GarminAccount account = accountWithToken(21L);
+        when(accountMapper.selectById(21L)).thenReturn(account);
+        when(tokenCipher.decrypt(21L, "stored-cipher")).thenReturn("token-json");
+        when(authClient.verifyToken("token-json", "CN"))
+                .thenReturn(new CollectorAuthResult("TOKEN_INVALID", null, null, "Garmin 令牌已失效，需要重新认证"));
+
+        assertThatThrownBy(() -> garminAccountService.verifyAccount(USER_ID, 21L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(ErrorCode.GARMIN_AUTH_REQUIRED);
+
+        ArgumentCaptor<GarminAccount> captor = ArgumentCaptor.forClass(GarminAccount.class);
+        verify(accountMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getAuthStatus()).isEqualTo("REAUTH_REQUIRED");
+    }
+
+    @Test
+    void shouldRejectVerifyWhenAccountHasNoToken() {
+        GarminAccount pending = activeAccount(22L);
+        pending.setTokenCiphertext(null);
+        when(accountMapper.selectById(22L)).thenReturn(pending);
+
+        assertThatThrownBy(() -> garminAccountService.verifyAccount(USER_ID, 22L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(ErrorCode.GARMIN_AUTH_REQUIRED);
+
+        verify(authClient, never()).verifyToken(anyString(), anyString());
+        verify(accountMapper, never()).updateById(any(GarminAccount.class));
+    }
+
+    @Test
+    void shouldNotVerifyAnotherUsersAccount() {
+        GarminAccount other = accountWithToken(23L);
+        other.setUserId(99L);
+        when(accountMapper.selectById(23L)).thenReturn(other);
+
+        assertThatThrownBy(() -> garminAccountService.verifyAccount(USER_ID, 23L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(ErrorCode.NOT_FOUND);
+
+        verify(tokenCipher, never()).decrypt(anyLong(), anyString());
+    }
+
+    private GarminAccount accountWithToken(Long id) {
+        GarminAccount account = activeAccount(id);
+        account.setTokenCiphertext("stored-cipher");
+        return account;
+    }
+
     private GarminAccount activeAccount(Long id) {
         GarminAccount account = new GarminAccount();
         account.setId(id);

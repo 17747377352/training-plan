@@ -13,6 +13,7 @@ from training_plan_collector.garmin_auth import (
     STATUS_MFA_INVALID,
     STATUS_MFA_REQUIRED,
     STATUS_RATE_LIMITED,
+    STATUS_TOKEN_INVALID,
     GarminAuthService,
     MfaSessionStore,
 )
@@ -38,14 +39,20 @@ class FakeGarminClient:
         login_result: tuple[str | None, object] = (None, None),
         login_error: Exception | None = None,
         mfa_error: Exception | None = None,
+        restore_error: Exception | None = None,
     ) -> None:
         self.client = FakeInnerClient()
         self._login_result = login_result
         self._login_error = login_error
         self._mfa_error = mfa_error
+        self._restore_error = restore_error
         self.resume_login_calls: list[tuple[object, str]] = []
+        self.login_tokenstores: list[str | None] = []
 
-    def login(self) -> tuple[str | None, object]:
+    def login(self, tokenstore: str | None = None) -> tuple[str | None, object]:
+        self.login_tokenstores.append(tokenstore)
+        if tokenstore is not None and self._restore_error is not None:
+            raise self._restore_error
         if self._login_error is not None:
             raise self._login_error
         return self._login_result
@@ -195,3 +202,46 @@ def test_region_is_case_insensitive(region: str):
     service.connect("rider@example.com", "secret", region)
 
     assert captured["is_cn"] is True
+
+
+def test_restore_session_uses_token_without_credentials():
+    client = FakeGarminClient()
+    service, _store, captured = build_service(client)
+
+    outcome = service.restore_session(TOKEN_JSON, "CN")
+
+    assert outcome.status == STATUS_CONNECTED
+    assert outcome.client is client
+    assert client.login_tokenstores == [TOKEN_JSON]
+    assert captured["email"] is None
+    assert captured["password"] is None
+    assert captured["is_cn"] is True
+    assert captured["return_on_mfa"] is False
+
+
+def test_restore_session_reports_invalid_token():
+    client = FakeGarminClient(restore_error=GarminConnectAuthenticationError("stale token"))
+    service, _store, _captured = build_service(client)
+
+    outcome = service.restore_session(TOKEN_JSON, "GLOBAL")
+
+    assert outcome.status == STATUS_TOKEN_INVALID
+    assert outcome.client is None
+    assert "stale token" not in (outcome.message or "")
+
+
+def test_restore_session_maps_rate_limit():
+    client = FakeGarminClient(restore_error=GarminConnectTooManyRequestsError("429"))
+    service, _store, _captured = build_service(client)
+
+    assert service.restore_session(TOKEN_JSON, "CN").status == STATUS_RATE_LIMITED
+
+
+def test_restore_session_hides_unexpected_errors():
+    client = FakeGarminClient(restore_error=RuntimeError("internal detail"))
+    service, _store, _captured = build_service(client)
+
+    outcome = service.restore_session(TOKEN_JSON, "CN")
+
+    assert outcome.status == STATUS_FAILED
+    assert "internal detail" not in (outcome.message or "")

@@ -86,10 +86,13 @@ uv run training-plan-collector
 - `GET /api/garmin/accounts`：已绑定账号列表，不返回任何令牌字段。
 - `POST /api/garmin/accounts/connect`：提交 Garmin 邮箱、密码与区域（`GLOBAL` 或 `CN`）。
 - `POST /api/garmin/accounts/connect/mfa`：提交验证码完成连接。
+- `POST /api/garmin/accounts/{id}/verify`：用已存令牌校验账号是否仍可用，失效时状态置为 `REAUTH_REQUIRED`。
 - `PUT /api/garmin/accounts/{id}/auto-sync`：启用或暂停自动同步。
 - `DELETE /api/garmin/accounts/{id}`：删除账号绑定。
 
 `connect` 返回 `status` 为 `CONNECTED` 或 `MFA_REQUIRED`；后者需带上 `loginSessionId` 调用 MFA 接口。Garmin 密码只在请求期间使用，不写数据库也不写日志。令牌使用 AES-GCM 加密后存入 `garmin_account.token_ciphertext`，密钥来自 `app.security.token-cipher-key`。
+
+网页端入口：登录后点击首页的「Garmin 账号」，或在 `/garmin` 直接打开，可在页面上完成连接、输入 MFA 验证码、校验令牌、暂停同步与删除绑定。
 
 ## 验证认证链路
 
@@ -100,6 +103,14 @@ bash server/scripts/verify-auth-e2e.sh
 ```
 
 脚本覆盖注册、登录、令牌类型隔离、刷新轮换、并发双花、退出撤销、管理员接口授权边界和未认证访问，共 30 项断言，全部通过时退出码为 0。它会向本地开发库写入 `e2e` 前缀的测试用户。
+
+Garmin 令牌恢复链路可以脱离真实账号验证（需要后端与采集器都在运行）：
+
+```bash
+ADMIN_ACCOUNT=<用户名> ADMIN_PASSWORD=<密码> bash server/scripts/verify-garmin-token.sh
+```
+
+脚本会用应用自己的密钥写入一条带伪造令牌的账号，断言平台能正确解密、采集器能恢复会话并被 Garmin 拒绝、账号状态落为 `REAUTH_REQUIRED`，最后自动清理该探测账号。
 
 ## 管理员接口
 

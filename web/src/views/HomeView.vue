@@ -51,6 +51,9 @@ onMounted(async () => {
           <strong>{{ authStore.profile?.username || "用户" }}</strong>
           <span>{{ authStore.profile?.email }}</span>
         </div>
+        <el-button type="primary" @click="router.push('/garmin')"
+          >Garmin 账号</el-button
+        >
         <el-button @click="handleLogout">退出登录</el-button>
       </div>
     </header>

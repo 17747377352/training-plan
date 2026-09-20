@@ -51,6 +51,12 @@ public class RestGarminAuthClient implements GarminAuthClient {
                 Map.of("loginSessionId", loginSessionId, "mfaCode", mfaCode));
     }
 
+    @Override
+    public CollectorAuthResult verifyToken(String tokenJson, String region) {
+        return post("/internal/garmin/verify-token",
+                Map.of("tokenJson", tokenJson, "region", region));
+    }
+
     private CollectorAuthResult post(String path, Map<String, String> payload) {
         try {
             CollectorAuthResponse response = restClient.post()
