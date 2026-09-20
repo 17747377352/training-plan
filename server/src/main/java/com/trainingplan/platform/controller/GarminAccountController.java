@@ -9,7 +9,9 @@ import com.trainingplan.platform.dto.garmin.GarminAccountDto;
 import com.trainingplan.platform.dto.garmin.GarminConnectResultDto;
 import com.trainingplan.platform.dto.garmin.ImportTokenRequest;
 import com.trainingplan.platform.dto.garmin.UpdateAutoSyncRequest;
+import com.trainingplan.platform.dto.garmin.TriggerSyncRequest;
 import com.trainingplan.platform.service.GarminAccountService;
+import com.trainingplan.platform.service.SyncService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -40,6 +42,7 @@ import java.util.List;
 public class GarminAccountController {
 
     private final GarminAccountService garminAccountService;
+    private final SyncService syncService;
 
     /**
      * 查询当前用户已绑定的 Garmin 账号。
@@ -89,6 +92,21 @@ public class GarminAccountController {
     public Result<GarminAccountDto> importToken(@Valid @RequestBody ImportTokenRequest request,
                                                 @AuthenticationPrincipal Jwt jwt) {
         return Result.success(garminAccountService.importToken(currentUserId(jwt), request));
+    }
+
+    /**
+     * 触发一次数据同步。
+     *
+     * @param id      账号 ID
+     * @param request 回溯天数
+     * @param jwt     当前登录令牌
+     * @return 同步任务 ID
+     */
+    @PostMapping("/{id}/sync")
+    public Result<Long> triggerSync(@PathVariable Long id,
+                                    @Valid @RequestBody TriggerSyncRequest request,
+                                    @AuthenticationPrincipal Jwt jwt) {
+        return Result.success(syncService.triggerSync(currentUserId(jwt), id, request.days()));
     }
 
     /**

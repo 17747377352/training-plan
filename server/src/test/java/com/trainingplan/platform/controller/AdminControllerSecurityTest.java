@@ -11,6 +11,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.autoconfigure.aop.AopAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import com.trainingplan.platform.security.CollectorTokenFilter;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.FilterType;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -41,7 +44,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @author gongxuesong
  * @date 2026-09-20
  */
-@WebMvcTest(controllers = AdminController.class)
+@WebMvcTest(controllers = AdminController.class,
+        excludeFilters = @ComponentScan.Filter(
+                type = FilterType.ASSIGNABLE_TYPE, classes = CollectorTokenFilter.class))
 @Import({SecurityConfig.class, JwtConfig.class,
         RestAuthenticationEntryPoint.class, RestAccessDeniedHandler.class})
 @ImportAutoConfiguration(AopAutoConfiguration.class)

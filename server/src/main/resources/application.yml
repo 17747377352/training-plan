@@ -33,6 +33,9 @@ management:
       show-details: never
 
 app:
+  sync:
+    # 同步任务队列，需与 collector 的 COLLECTOR_TASK_QUEUE 一致
+    task-queue: ${SYNC_TASK_QUEUE:training-plan:sync:jobs}
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173}
   security:

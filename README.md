@@ -98,6 +98,7 @@ Garmin 会对登录端点做 IP 级限流。一旦登录被限流或遇到 Cloud
 - `POST /api/garmin/accounts/connect/mfa`：提交验证码完成连接。
 - `POST /api/garmin/accounts/import-token`：导入已有令牌完成绑定，用于程序登录被 Garmin 拦下时。
 - `POST /api/garmin/accounts/{id}/verify`：用已存令牌校验账号是否仍可用，失效时状态置为 `REAUTH_REQUIRED`。
+- `POST /api/garmin/accounts/{id}/sync`：触发一次同步，请求体 `{"days": 7}` 控制回溯天数。
 - `PUT /api/garmin/accounts/{id}/auto-sync`：启用或暂停自动同步。
 - `DELETE /api/garmin/accounts/{id}`：删除账号绑定。
 
@@ -110,6 +111,14 @@ Garmin 会对登录端点做 IP 级限流。一旦登录被限流或遇到 Cloud
 程序登录被 Garmin 限流或人机验证拦住时，用页面上的「导入令牌」：在浏览器登录 `connect.garmin.com`，取得 `{"di_token":..,"di_refresh_token":..,"di_client_id":..}` 后连同 Garmin 邮箱与站点一起提交。平台会先向采集器校验令牌可用，再使用 AES-GCM 加密存储；令牌约一年有效且由库自动刷新，无需重复登录。
 
 令牌等同账号凭据，**不要提交到 Git**。本地留存的令牌建议放在已被 `.gitignore` 忽略的 `storage/` 目录下。
+
+## 数据同步
+
+触发同步后，平台创建 `sync_job` 并投入 Redis 队列（`app.sync.task-queue`，需与采集器 `COLLECTOR_TASK_QUEUE` 一致）；采集器取出任务后按任务 ID 通过 `/internal/collector/jobs/{id}/session` 换取解密后的令牌（**队列载荷本身不含令牌**），拉取数据再回传落库。
+
+入库约定：缺失指标存 `NULL` 而不是 0；睡眠按入睡时间去重，同一天的午睡不会被合并；时间统一存 GMT。
+
+同步目前**只能手动触发**，尚未接入定时调度。
 
 ## 验证认证链路
 

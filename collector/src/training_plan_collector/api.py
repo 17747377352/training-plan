@@ -5,14 +5,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import secrets
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from training_plan_collector.garmin_auth import AuthOutcome, GarminAuthService, MfaSessionStore
+from training_plan_collector.redis_client import create_redis_client
 from training_plan_collector.settings import CollectorSettings
+from training_plan_collector.sync_worker import SyncWorker
 
 logger = structlog.get_logger()
 
@@ -64,8 +69,43 @@ def create_app(
         ),
         rate_limit_cooldown_seconds=resolved_settings.rate_limit_cooldown_seconds,
     )
-    app = FastAPI(title="Training Plan Collector", docs_url=None, redoc_url=None, openapi_url=None)
 
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        """随应用启动同步工人；Redis 不可用时只告警，不阻塞内网接口。"""
+
+        redis = create_redis_client(resolved_settings)
+        worker_task: asyncio.Task[None] | None = None
+        worker: SyncWorker | None = None
+        try:
+            await redis.ping()
+        except Exception as exception:  # noqa: BLE001
+            logger.warning("sync_worker_disabled", reason="redis_unavailable",
+                           error_type=type(exception).__name__)
+            await redis.aclose()
+            redis = None
+        if redis is not None and resolved_settings.server_token:
+            worker = SyncWorker(resolved_settings, resolved_service, redis)
+            worker_task = asyncio.create_task(worker.run())
+        elif redis is not None:
+            logger.warning("sync_worker_disabled", reason="server_token_missing")
+
+        yield
+
+        if worker is not None and worker_task is not None:
+            worker.stop()
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        if redis is not None:
+            await redis.aclose()
+
+
+
+    app = FastAPI(title="Training Plan Collector", docs_url=None, redoc_url=None,
+                  openapi_url=None, lifespan=lifespan)
     def require_service_token(x_collector_token: str | None = Header(default=None)) -> None:
         """校验内部服务凭据，避免内网接口被同主机其他进程调用。"""
 

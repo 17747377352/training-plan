@@ -49,6 +49,8 @@ public class SecurityConfig {
                                 "/api/auth/logout")
                         .permitAll()
                         .requestMatchers("/api/system/health", "/actuator/health", "/error").permitAll()
+                        // 内部接口由 CollectorTokenFilter 用服务凭据鉴权，不走用户令牌
+                        .requestMatchers("/internal/**").permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(exception -> exception
                         .authenticationEntryPoint(authenticationEntryPoint)
