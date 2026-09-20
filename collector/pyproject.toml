@@ -1,0 +1,38 @@
+[project]
+name = "training-plan-collector"
+version = "0.1.0"
+description = "Garmin data collector for Training Plan"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "garminconnect[typed]==0.3.16",
+    "httpx>=0.28.1",
+    "pydantic-settings>=2.15.0",
+    "redis>=8.1.0",
+    "structlog>=26.1.0",
+]
+
+[build-system]
+requires = ["uv-build>=0.10.6,<0.11.0"]
+build-backend = "uv_build"
+
+[project.scripts]
+training-plan-collector = "training_plan_collector.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

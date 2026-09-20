@@ -1,0 +1,33 @@
+.DS_Store
+.idea/
+.vscode/
+*.iml
+*.log
+
+# Java
+server/target/
+server/.classpath
+server/.project
+server/.settings/
+server/src/main/resources/application-dev.yml
+
+# Vue
+web/node_modules/
+web/dist/
+web/.env.development
+web/.env.production
+web/.env.local
+
+# Python
+collector/.venv/
+collector/.env.dev
+collector/.env
+collector/__pycache__/
+collector/.pytest_cache/
+collector/.ruff_cache/
+*.py[cod]
+
+# Runtime data
+storage/
+logs/
+

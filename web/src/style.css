@@ -1,0 +1,113 @@
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  color: #1f2937;
+  background: #f3f6fa;
+  font-family:
+    Inter,
+    "PingFang SC",
+    "Microsoft YaHei",
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+#app,
+.app-shell {
+  min-height: 100vh;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 64px;
+  color: #ffffff;
+  background: linear-gradient(135deg, #13233f, #2357a5);
+  box-shadow: 0 3px 18px rgb(15 35 70 / 18%);
+}
+
+.app-header > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: #16315d;
+  background: #67e8c5;
+  font-weight: 800;
+}
+
+.subtitle {
+  color: #cfe0ff;
+  font-size: 14px;
+}
+
+.page-container {
+  width: min(1080px, 100%);
+  margin: 0 auto;
+}
+
+.page-heading {
+  margin: 18px 0 24px;
+}
+
+.page-heading h1 {
+  margin: 0 0 8px;
+  font-size: 28px;
+}
+
+.page-heading p,
+.status-meta {
+  margin: 0;
+  color: #64748b;
+}
+
+.status-card {
+  border: 0;
+  border-radius: 16px;
+  box-shadow: 0 10px 35px rgb(40 70 110 / 8%);
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 92px;
+}
+
+.status-title {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.status-meta {
+  font-size: 14px;
+}
+
+@media (max-width: 640px) {
+  .subtitle {
+    display: none;
+  }
+
+  .app-header {
+    padding: 0 16px;
+  }
+
+  .el-main {
+    padding: 14px;
+  }
+}

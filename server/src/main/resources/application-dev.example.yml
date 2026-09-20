@@ -1,0 +1,15 @@
+spring:
+  datasource:
+    type: com.zaxxer.hikari.HikariDataSource
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:13306/training_plan?useUnicode=true&useSSL=false&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: root
+    password: 请填写本地MySQL密码
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      password: 请填写本地Redis密码
+      timeout: 7200ms
+      database: 5
+
