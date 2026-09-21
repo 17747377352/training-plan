@@ -21,6 +21,25 @@ public interface SyncService {
     Long triggerSync(Long userId, Long accountId, Integer days);
 
     /**
+     * 定时任务发起同步：不校验归属，`requestedBy` 记为空。
+     *
+     * @param accountId Garmin 账号 ID
+     * @param days      回溯天数
+     * @return 同步任务 ID，未创建时返回 null
+     */
+    Long triggerScheduledSync(Long accountId, Integer days);
+
+    /**
+     * 为所有启用自动同步的账号创建当日同步任务。
+     *
+     * <p>已有未完成任务在飞的账号会跳过，避免同一账号并发同步。</p>
+     *
+     * @param days 回溯天数
+     * @return 实际创建的任务数
+     */
+    int triggerDailySyncs(Integer days);
+
+    /**
      * 按任务 ID 取回解密后的 Garmin 令牌，仅供采集器通过内部接口调用。
      *
      * @param jobId 同步任务 ID

@@ -42,6 +42,10 @@ app:
     running-timeout: 60m
     cleanup-interval: 5m
     cleanup-initial-delay: 1m
+    # 每日定时同步：默认每天上午 9:00 拉取当日数据
+    daily-cron: 0 0 9 * * *
+    daily-days: 1
+    zone: Asia/Shanghai
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173}
   security:

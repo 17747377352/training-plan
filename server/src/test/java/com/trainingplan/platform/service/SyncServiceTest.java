@@ -240,6 +240,70 @@ class SyncServiceTest {
         assertThat(syncService.failStaleJobs()).isZero();
     }
 
+    @Test
+    void shouldCreateDailyJobsForEnabledAccounts() {
+        when(accountMapper.selectList(any(Wrapper.class))).thenReturn(List.of(boundAccount()));
+        when(syncJobMapper.selectCount(any())).thenReturn(0L);
+        when(syncJobMapper.insert(any(SyncJob.class))).thenAnswer(invocation -> {
+            ((SyncJob) invocation.getArgument(0)).setId(200L);
+            return 1;
+        });
+        when(redisTemplate.opsForList()).thenReturn(listOperations);
+
+        int created = syncService.triggerDailySyncs(1);
+
+        assertThat(created).isEqualTo(1);
+        ArgumentCaptor<SyncJob> captor = ArgumentCaptor.forClass(SyncJob.class);
+        verify(syncJobMapper).insert(captor.capture());
+        assertThat(captor.getValue().getJobType()).isEqualTo("SCHEDULED");
+        // 定时任务没有发起用户
+        assertThat(captor.getValue().getRequestedBy()).isNull();
+    }
+
+    @Test
+    void shouldSkipAccountsWithUnfinishedJob() {
+        when(accountMapper.selectList(any(Wrapper.class))).thenReturn(List.of(boundAccount()));
+        when(syncJobMapper.selectCount(any())).thenReturn(1L);
+
+        assertThat(syncService.triggerDailySyncs(1)).isZero();
+        verify(syncJobMapper, never()).insert(any(SyncJob.class));
+    }
+
+    @Test
+    void shouldSkipAccountsWithoutToken() {
+        GarminAccount noToken = boundAccount();
+        noToken.setTokenCiphertext(null);
+        when(accountMapper.selectList(any(Wrapper.class))).thenReturn(List.of(noToken));
+
+        assertThat(syncService.triggerDailySyncs(1)).isZero();
+        verify(syncJobMapper, never()).insert(any(SyncJob.class));
+    }
+
+    @Test
+    void shouldNotFailWholeBatchWhenOneAccountCannotSync() {
+        GarminAccount broken = boundAccount();
+        broken.setTokenCiphertext(null);
+        GarminAccount healthy = boundAccount();
+        healthy.setId(17L);
+        when(accountMapper.selectList(any(Wrapper.class))).thenReturn(List.of(broken, healthy));
+        when(syncJobMapper.selectCount(any())).thenReturn(0L);
+        when(syncJobMapper.insert(any(SyncJob.class))).thenAnswer(invocation -> {
+            ((SyncJob) invocation.getArgument(0)).setId(201L);
+            return 1;
+        });
+        when(redisTemplate.opsForList()).thenReturn(listOperations);
+
+        assertThat(syncService.triggerDailySyncs(1)).isEqualTo(1);
+    }
+
+    @Test
+    void shouldReturnNullWhenScheduledAccountMissing() {
+        when(accountMapper.selectById(any())).thenReturn(null);
+
+        assertThat(syncService.triggerScheduledSync(404L, 1)).isNull();
+        verify(syncJobMapper, never()).insert(any(SyncJob.class));
+    }
+
     private GarminAccount boundAccount() {
         GarminAccount account = new GarminAccount();
         account.setId(ACCOUNT_ID);

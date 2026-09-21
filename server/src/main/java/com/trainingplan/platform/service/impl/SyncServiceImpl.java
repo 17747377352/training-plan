@@ -51,6 +51,8 @@ import java.util.List;
 public class SyncServiceImpl implements SyncService {
 
     private static final String JOB_TYPE_MANUAL = "MANUAL";
+    private static final String JOB_TYPE_SCHEDULED = "SCHEDULED";
+    private static final String STATUS_ACTIVE_ACCOUNT = "ACTIVE";
     private static final String STATUS_PENDING = "PENDING";
     private static final String STATUS_RUNNING = "RUNNING";
     private static final String STATUS_SUCCESS = "SUCCESS";
@@ -83,6 +85,52 @@ public class SyncServiceImpl implements SyncService {
         if (account == null || !account.getUserId().equals(userId)) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "Garmin账号不存在");
         }
+        return createJob(account, userId, JOB_TYPE_MANUAL, days);
+    }
+
+    @Override
+    public Long triggerScheduledSync(Long accountId, Integer days) {
+        GarminAccount account = accountMapper.selectById(accountId);
+        if (account == null) {
+            return null;
+        }
+        return createJob(account, null, JOB_TYPE_SCHEDULED, days);
+    }
+
+    @Override
+    public int triggerDailySyncs(Integer days) {
+        List<GarminAccount> accounts = accountMapper.selectList(Wrappers.<GarminAccount>lambdaQuery()
+                .eq(GarminAccount::getAuthStatus, STATUS_ACTIVE_ACCOUNT)
+                .eq(GarminAccount::getSyncEnabled, 1));
+        int created = 0;
+        for (GarminAccount account : accounts) {
+            if (hasUnfinishedJob(account.getId()) || account.getTokenCiphertext() == null
+                    || account.getTokenCiphertext().isBlank()) {
+                continue;
+            }
+            try {
+                if (createJob(account, null, JOB_TYPE_SCHEDULED, days) != null) {
+                    created++;
+                }
+            } catch (BusinessException exception) {
+                log.warn("定时同步跳过账号 accountId={} 原因={}", account.getId(), exception.getMessage());
+            }
+        }
+        log.info("定时同步已为 {} 个账号创建任务，候选账号 {} 个", created, accounts.size());
+        return created;
+    }
+
+    /**
+     * 校验账号可同步并创建任务、投递队列。
+     *
+     * @param account     账号
+     * @param requestedBy 发起用户，定时任务传 null
+     * @param jobType     任务类型
+     * @param days        回溯天数
+     * @return 任务 ID
+     */
+    private Long createJob(GarminAccount account, Long requestedBy, String jobType, Integer days) {
+        Long accountId = account.getId();
         if (account.getTokenCiphertext() == null || account.getTokenCiphertext().isBlank()) {
             throw new BusinessException(ErrorCode.GARMIN_AUTH_REQUIRED, "Garmin账号尚未完成绑定");
         }
@@ -90,9 +138,9 @@ public class SyncServiceImpl implements SyncService {
 
         SyncJob job = new SyncJob();
         job.setGarminAccountId(accountId);
-        job.setJobType(JOB_TYPE_MANUAL);
+        job.setJobType(jobType);
         job.setJobStatus(STATUS_PENDING);
-        job.setRequestedBy(userId);
+        job.setRequestedBy(requestedBy);
         syncJobMapper.insert(job);
 
         LocalDate end = LocalDate.now();
@@ -208,6 +256,19 @@ public class SyncServiceImpl implements SyncService {
         update.setFinishedTime(LocalDateTime.now());
         update.setErrorCode(errorCode);
         return update;
+    }
+
+    /**
+     * 账号是否已有未完成的同步任务，避免同一账号并发同步。
+     *
+     * @param accountId Garmin 账号 ID
+     * @return 是否存在未完成任务
+     */
+    private boolean hasUnfinishedJob(Long accountId) {
+        Long count = syncJobMapper.selectCount(Wrappers.<SyncJob>lambdaQuery()
+                .eq(SyncJob::getGarminAccountId, accountId)
+                .in(SyncJob::getJobStatus, List.of(STATUS_PENDING, STATUS_RUNNING)));
+        return count != null && count > 0;
     }
 
     private SyncJob requireJob(Long jobId) {

@@ -8,6 +8,7 @@ import {
   importToken,
   listAccounts,
   submitMfa,
+  triggerSync,
   updateAutoSync,
   verifyAccount,
 } from "../api/garmin";
@@ -33,6 +34,11 @@ const mfaCode = ref("");
 const mfaSubmitting = ref(false);
 const loginSessionId = ref("");
 
+const backfillDialogVisible = ref(false);
+const backfillAccountId = ref<number>();
+const backfillRunning = ref(false);
+const syncingId = ref<number>();
+
 const importDialogVisible = ref(false);
 const importSubmitting = ref(false);
 const importForm = reactive({
@@ -40,6 +46,11 @@ const importForm = reactive({
   tokenJson: "",
   region: "GLOBAL" as GarminRegion,
 });
+
+/** 首次绑定后可选拉取的历史天数。 */
+const INITIAL_BACKFILL_DAYS = 15;
+/** 手动同步默认回溯天数，与开发计划的增量策略一致（覆盖 Garmin 延迟修正）。 */
+const MANUAL_SYNC_DAYS = 7;
 
 const STATUS_LABELS: Record<GarminAuthStatus, string> = {
   PENDING: "待认证",
@@ -105,7 +116,7 @@ async function handleConnect() {
       return;
     }
     ElMessage.success("Garmin 账号连接成功");
-    await loadAccounts();
+    askInitialBackfill(result.account?.id);
   } catch {
     // 错误提示由请求拦截器统一处理
   } finally {
@@ -129,7 +140,7 @@ async function handleSubmitMfa() {
     mfaDialogVisible.value = false;
     mfaCode.value = "";
     ElMessage.success("Garmin 账号连接成功");
-    await loadAccounts();
+    askInitialBackfill(result.account?.id);
   } catch {
     // 会话仍保留，允许用户重试；错误提示由拦截器处理
   } finally {
@@ -143,6 +154,49 @@ function handleCancelMfa() {
   ElMessage.info("已取消验证码输入，可稍后重新连接");
 }
 
+/** 绑定成功后询问是否首次拉取历史数据。 */
+function askInitialBackfill(accountId?: number) {
+  if (!accountId) {
+    void loadAccounts();
+    return;
+  }
+  backfillAccountId.value = accountId;
+  backfillDialogVisible.value = true;
+}
+
+async function handleBackfill(agree: boolean) {
+  const accountId = backfillAccountId.value;
+  if (!agree || !accountId) {
+    backfillDialogVisible.value = false;
+    ElMessage.info("已跳过首次拉取，之后每天 9:00 会自动同步当日数据");
+    await loadAccounts();
+    return;
+  }
+  backfillRunning.value = true;
+  try {
+    await triggerSync(accountId, INITIAL_BACKFILL_DAYS);
+    backfillDialogVisible.value = false;
+    ElMessage.success(`已提交首次拉取（最近 ${INITIAL_BACKFILL_DAYS} 天），同步完成后即可查看`);
+    await loadAccounts();
+  } catch {
+    // 错误提示由拦截器统一处理
+  } finally {
+    backfillRunning.value = false;
+  }
+}
+
+async function handleSync(account: GarminAccount) {
+  syncingId.value = account.id;
+  try {
+    await triggerSync(account.id, MANUAL_SYNC_DAYS);
+    ElMessage.success(`已提交同步（最近 ${MANUAL_SYNC_DAYS} 天）`);
+  } catch {
+    // 错误提示由拦截器统一处理
+  } finally {
+    syncingId.value = undefined;
+  }
+}
+
 async function handleImportToken() {
   if (importSubmitting.value) return;
   if (!importForm.email || !importForm.tokenJson) {
@@ -151,7 +205,7 @@ async function handleImportToken() {
   }
   importSubmitting.value = true;
   try {
-    await importToken({
+    const account = await importToken({
       email: importForm.email.trim(),
       tokenJson: importForm.tokenJson.trim(),
       region: importForm.region,
@@ -160,7 +214,7 @@ async function handleImportToken() {
     // 令牌是凭据，导入后立即从表单里清掉
     importForm.tokenJson = "";
     ElMessage.success("令牌导入成功，账号已连接");
-    await loadAccounts();
+    askInitialBackfill(account?.id);
   } catch {
     // 错误提示由拦截器统一处理
   } finally {
@@ -314,6 +368,13 @@ onMounted(loadAccounts);
             <el-button
               link
               type="primary"
+              :loading="syncingId === row.id"
+              @click="handleSync(row)"
+            >
+              同步
+            </el-button>
+            <el-button
+              link
               :loading="verifyingId === row.id"
               @click="handleVerify(row)"
             >
@@ -359,6 +420,31 @@ onMounted(loadAccounts);
           @click="handleSubmitMfa"
         >
           提交验证码
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="backfillDialogVisible"
+      title="首次拉取历史数据"
+      width="460px"
+      :close-on-click-modal="false"
+    >
+      <p class="mfa-hint">
+        账号绑定成功。是否现在拉取最近 <strong>{{ INITIAL_BACKFILL_DAYS }} 天</strong>的历史数据？
+      </p>
+      <p class="mfa-hint">
+        选择「暂不」也不影响使用：之后每天上午 9:00 会自动同步当日数据。
+      </p>
+      <template #footer>
+        <el-button :disabled="backfillRunning" @click="handleBackfill(false)">暂不</el-button>
+        <el-button
+          type="primary"
+          :loading="backfillRunning"
+          :disabled="backfillRunning"
+          @click="handleBackfill(true)"
+        >
+          拉取 {{ INITIAL_BACKFILL_DAYS }} 天
         </el-button>
       </template>
     </el-dialog>

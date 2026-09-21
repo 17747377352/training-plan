@@ -76,6 +76,16 @@ export function importToken(form: {
   });
 }
 
+/** 触发一次数据同步。days 为回溯天数，1 表示仅当天。 */
+export function triggerSync(id: number, days: number): Promise<number> {
+  return request({
+    method: "POST",
+    url: `/api/garmin/accounts/${id}/sync`,
+    data: { days },
+    timeout: GARMIN_TIMEOUT,
+  });
+}
+
 export function updateAutoSync(id: number, syncEnabled: number): Promise<void> {
   return request({
     method: "PUT",
