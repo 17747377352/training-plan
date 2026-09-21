@@ -9,6 +9,13 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
+          if (
+            id.includes("/element-plus/es/components/date-picker/") ||
+            id.includes("/element-plus/es/components/time-picker/") ||
+            id.includes("/dayjs/")
+          ) {
+            return "date-tools";
+          }
           if (id.includes("element-plus")) return "element-plus";
           if (
             id.includes("/vue/") ||

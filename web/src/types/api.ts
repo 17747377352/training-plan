@@ -4,6 +4,13 @@ export interface ApiResult<T> {
   data: T;
 }
 
+export interface PageResult<T> {
+  total: number;
+  page: number;
+  size: number;
+  records: T[];
+}
+
 export interface SystemStatus {
   application: string;
   status: string;
@@ -45,4 +52,41 @@ export interface GarminConnectResult {
   status: "CONNECTED" | "MFA_REQUIRED";
   loginSessionId?: string | null;
   account?: GarminAccount | null;
+}
+
+export interface ActivityQuery {
+  page: number;
+  size: number;
+  startDate?: string;
+  endDate?: string;
+  typeKey?: string;
+  keyword?: string;
+}
+
+export interface ActivitySummary {
+  id: number;
+  activityTypeKey: string;
+  activityName?: string | null;
+  startTime?: string | null;
+  durationSeconds?: number | null;
+  movingDurationSeconds?: number | null;
+  distanceMeters?: number | null;
+  elevationGain?: number | null;
+  averageSpeed?: number | null;
+  maxSpeed?: number | null;
+  averageHr?: number | null;
+  maxHr?: number | null;
+  calories?: number | null;
+  avgPower?: number | null;
+  normPower?: number | null;
+  max20minPower?: number | null;
+  intensityFactor?: number | null;
+  trainingStressScore?: number | null;
+  avgCadence?: number | null;
+  avgLeftBalance?: number | null;
+  aerobicTrainingEffect?: number | null;
+  anaerobicTrainingEffect?: number | null;
+  trainingEffectLabel?: string | null;
+  activityTrainingLoad?: number | null;
+  vo2maxValue?: number | null;
 }
