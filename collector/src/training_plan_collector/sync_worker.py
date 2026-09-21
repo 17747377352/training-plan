@@ -30,6 +30,23 @@ ERROR_GARMIN_SYNC = "GARMIN_SYNC_ERROR"
 ERROR_RATE_LIMITED = "GARMIN_RATE_LIMITED"
 ERROR_UNEXPECTED = "SYSTEM_ERROR"
 
+# 本期只同步骑行活动；徒步等其他类型不进入骑行统计。
+ACTIVITY_TYPE_CYCLING = "cycling"
+
+
+def _datetime_to_iso(value: Any) -> str | None:
+    """把 Garmin 的 "yyyy-MM-dd HH:mm:ss" 转成 ISO 的 T 分隔格式。
+
+    平台侧统一按 ISO 解析；Garmin 用空格分隔，直接透传会导致时间列全为空。
+    """
+
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    return text.replace(" ", "T", 1)
+
 
 def _gmt_to_iso(millis: Any) -> str | None:
     """Garmin 的毫秒时间戳转 GMT ISO 字符串。"""
@@ -129,6 +146,7 @@ class SyncWorker:
                     daily=len(body["dailyHealth"]),
                     sleep=len(body["sleep"]),
                     hrv=len(body["hrv"]),
+                    activities=len(body["activities"]),
                 )
             except ReadOnlyViolation as violation:
                 logger.warning("sync_job_read_only_violation", job_id=job_id, detail=str(violation))
@@ -164,6 +182,7 @@ class SyncWorker:
         daily: list[dict[str, Any]] = []
         sleep: list[dict[str, Any]] = []
         hrv: list[dict[str, Any]] = []
+        activities: dict[Any, dict[str, Any]] = {}
 
         for day in days:
             stats = self._safe(lambda d=day: adapter.get_daily_stats(d))
@@ -182,7 +201,19 @@ class SyncWorker:
                 if row is not None:
                     hrv.append(row)
 
-        return {"dailyHealth": daily, "sleep": sleep, "hrv": hrv}
+        start, end = days[0], days[-1]
+        for activity in self._safe(lambda: adapter.client.get_activities_by_date(
+                start, end, ACTIVITY_TYPE_CYCLING, "asc")) or []:
+            row = self._activity_row(activity)
+            if row is not None:
+                activities[row["garminActivityId"]] = row
+
+        return {
+            "dailyHealth": daily,
+            "sleep": sleep,
+            "hrv": hrv,
+            "activities": list(activities.values()),
+        }
 
     @staticmethod
     def _safe(fetch: Any) -> Any:
@@ -247,6 +278,71 @@ class SyncWorker:
             "avgSleepHrv": dto.get("avgSleepHRV"),
             "avgSpo2": dto.get("avgSpO2"),
             "avgRespiration": dto.get("averageRespirationValue"),
+        }
+
+    @staticmethod
+    def _activity_row(activity: dict[str, Any]) -> dict[str, Any] | None:
+        """把 Garmin 活动列表中的一条转换为平台字段。
+
+        字段名依据 2026-09-21 对真实响应的实地核对；踏频是
+        averageBikingCadenceInRevPerMinute，功率区间与左右平衡直接在列表里。
+        GPS 坐标、位置名与账号姓名一律不取。
+        """
+
+        activity_id = activity.get("activityId")
+        if activity_id is None:
+            return None
+        type_info = activity.get("activityType") or {}
+        return {
+            "garminActivityId": activity_id,
+            "activityTypeKey": type_info.get("typeKey"),
+            "activityTypeId": type_info.get("typeId"),
+            "parentTypeId": type_info.get("parentTypeId"),
+            "activityName": activity.get("activityName"),
+            "startTimeGmt": _datetime_to_iso(activity.get("startTimeGMT")),
+            "startTimeLocal": _datetime_to_iso(activity.get("startTimeLocal")),
+            "durationSeconds": activity.get("duration"),
+            "movingDurationSeconds": activity.get("movingDuration"),
+            "elapsedDurationSeconds": activity.get("elapsedDuration"),
+            "distanceMeters": activity.get("distance"),
+            "elevationGain": activity.get("elevationGain"),
+            "elevationLoss": activity.get("elevationLoss"),
+            "avgElevation": activity.get("avgElevation"),
+            "maxElevation": activity.get("maxElevation"),
+            "minElevation": activity.get("minElevation"),
+            "averageSpeed": activity.get("averageSpeed"),
+            "maxSpeed": activity.get("maxSpeed"),
+            "averageHr": activity.get("averageHR"),
+            "maxHr": activity.get("maxHR"),
+            "calories": activity.get("calories"),
+            "bmrCalories": activity.get("bmrCalories"),
+            "avgPower": activity.get("avgPower"),
+            "maxPower": activity.get("maxPower"),
+            "normPower": activity.get("normPower"),
+            "max20minPower": activity.get("max20MinPower"),
+            "intensityFactor": activity.get("intensityFactor"),
+            "trainingStressScore": activity.get("trainingStressScore"),
+            "avgCadence": activity.get("averageBikingCadenceInRevPerMinute"),
+            "maxCadence": activity.get("maxBikingCadenceInRevPerMinute"),
+            "avgLeftBalance": activity.get("avgLeftBalance"),
+            "aerobicTrainingEffect": activity.get("aerobicTrainingEffect"),
+            "anaerobicTrainingEffect": activity.get("anaerobicTrainingEffect"),
+            "trainingEffectLabel": activity.get("trainingEffectLabel"),
+            "activityTrainingLoad": activity.get("activityTrainingLoad"),
+            "powerZone1Seconds": activity.get("powerTimeInZone_1"),
+            "powerZone2Seconds": activity.get("powerTimeInZone_2"),
+            "powerZone3Seconds": activity.get("powerTimeInZone_3"),
+            "powerZone4Seconds": activity.get("powerTimeInZone_4"),
+            "powerZone5Seconds": activity.get("powerTimeInZone_5"),
+            "powerZone6Seconds": activity.get("powerTimeInZone_6"),
+            "powerZone7Seconds": activity.get("powerTimeInZone_7"),
+            "lapCount": activity.get("lapCount"),
+            "strokes": activity.get("strokes"),
+            "avgRespirationRate": activity.get("avgRespirationRate"),
+            "minTemperature": activity.get("minTemperature"),
+            "maxTemperature": activity.get("maxTemperature"),
+            "vo2maxValue": activity.get("vO2MaxValue"),
+            "deviceId": activity.get("deviceId"),
         }
 
     @staticmethod

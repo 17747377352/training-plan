@@ -10,5 +10,6 @@ import java.util.List;
  */
 public record SyncIngestRequest(List<DailyHealthDto> dailyHealth,
                                 List<SleepRecordDto> sleep,
-                                List<HrvRecordDto> hrv) {
+                                List<HrvRecordDto> hrv,
+                                List<ActivityDto> activities) {
 }

@@ -7,16 +7,19 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trainingplan.platform.common.error.ErrorCode;
 import com.trainingplan.platform.common.exception.BusinessException;
+import com.trainingplan.platform.dto.sync.ActivityDto;
 import com.trainingplan.platform.dto.sync.DailyHealthDto;
 import com.trainingplan.platform.dto.sync.HrvRecordDto;
 import com.trainingplan.platform.dto.sync.SleepRecordDto;
 import com.trainingplan.platform.dto.sync.SyncIngestRequest;
 import com.trainingplan.platform.dto.sync.SyncTaskPayload;
+import com.trainingplan.platform.entity.Activity;
 import com.trainingplan.platform.entity.DailyHealth;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.entity.HrvRecord;
 import com.trainingplan.platform.entity.SleepRecord;
 import com.trainingplan.platform.entity.SyncJob;
+import com.trainingplan.platform.mapper.ActivityMapper;
 import com.trainingplan.platform.mapper.DailyHealthMapper;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.mapper.HrvRecordMapper;
@@ -61,6 +64,7 @@ public class SyncServiceImpl implements SyncService {
 
     private final SyncJobMapper syncJobMapper;
     private final GarminAccountMapper accountMapper;
+    private final ActivityMapper activityMapper;
     private final DailyHealthMapper dailyHealthMapper;
     private final SleepRecordMapper sleepRecordMapper;
     private final HrvRecordMapper hrvRecordMapper;
@@ -194,7 +198,9 @@ public class SyncServiceImpl implements SyncService {
         int daily = upsertDailyHealth(accountId, request.dailyHealth());
         int sleep = upsertSleep(accountId, request.sleep());
         int hrv = upsertHrv(accountId, request.hrv());
-        log.info("同步数据已入库 jobId={} daily={} sleep={} hrv={}", jobId, daily, sleep, hrv);
+        int activities = upsertActivities(accountId, request.activities());
+        log.info("同步数据已入库 jobId={} daily={} sleep={} hrv={} activity={}",
+                jobId, daily, sleep, hrv, activities);
     }
 
     @Override
@@ -385,6 +391,97 @@ public class SyncServiceImpl implements SyncService {
         return affected;
     }
 
+
+    /**
+     * 覆盖写入骑行活动，按 (账号, Garmin 活动 ID) 去重。
+     *
+     * @param accountId 账号 ID
+     * @param rows      活动列表
+     * @return 处理条数
+     */
+    private int upsertActivities(Long accountId, List<ActivityDto> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return 0;
+        }
+        int affected = 0;
+        for (ActivityDto dto : rows) {
+            if (dto.garminActivityId() == null) {
+                continue;
+            }
+            Activity existing = activityMapper.selectOne(Wrappers.<Activity>lambdaQuery()
+                    .eq(Activity::getGarminAccountId, accountId)
+                    .eq(Activity::getGarminActivityId, dto.garminActivityId()));
+            Activity entity = existing == null ? new Activity() : existing;
+            entity.setGarminAccountId(accountId);
+            entity.setGarminActivityId(dto.garminActivityId());
+            entity.setActivityTypeKey(dto.activityTypeKey());
+            entity.setActivityTypeId(dto.activityTypeId());
+            entity.setParentTypeId(dto.parentTypeId());
+            entity.setActivityName(dto.activityName());
+            entity.setStartTimeGmt(parseDateTime(dto.startTimeGmt()));
+            entity.setStartTimeLocal(parseDateTime(dto.startTimeLocal()));
+            entity.setDurationSeconds(toInt(dto.durationSeconds()));
+            entity.setMovingDurationSeconds(toInt(dto.movingDurationSeconds()));
+            entity.setElapsedDurationSeconds(toInt(dto.elapsedDurationSeconds()));
+            entity.setDistanceMeters(dto.distanceMeters());
+            entity.setElevationGain(dto.elevationGain());
+            entity.setElevationLoss(dto.elevationLoss());
+            entity.setAvgElevation(dto.avgElevation());
+            entity.setMaxElevation(dto.maxElevation());
+            entity.setMinElevation(dto.minElevation());
+            entity.setAverageSpeed(dto.averageSpeed());
+            entity.setMaxSpeed(dto.maxSpeed());
+            entity.setAverageHr(toInt(dto.averageHr()));
+            entity.setMaxHr(toInt(dto.maxHr()));
+            entity.setCalories(dto.calories());
+            entity.setBmrCalories(dto.bmrCalories());
+            entity.setAvgPower(dto.avgPower());
+            entity.setMaxPower(dto.maxPower());
+            entity.setNormPower(dto.normPower());
+            entity.setMax20minPower(dto.max20minPower());
+            entity.setIntensityFactor(dto.intensityFactor());
+            entity.setTrainingStressScore(dto.trainingStressScore());
+            entity.setAvgCadence(dto.avgCadence());
+            entity.setMaxCadence(dto.maxCadence());
+            entity.setAvgLeftBalance(dto.avgLeftBalance());
+            entity.setAerobicTrainingEffect(dto.aerobicTrainingEffect());
+            entity.setAnaerobicTrainingEffect(dto.anaerobicTrainingEffect());
+            entity.setTrainingEffectLabel(dto.trainingEffectLabel());
+            entity.setActivityTrainingLoad(dto.activityTrainingLoad());
+            entity.setPowerZone1Seconds(dto.powerZone1Seconds());
+            entity.setPowerZone2Seconds(dto.powerZone2Seconds());
+            entity.setPowerZone3Seconds(dto.powerZone3Seconds());
+            entity.setPowerZone4Seconds(dto.powerZone4Seconds());
+            entity.setPowerZone5Seconds(dto.powerZone5Seconds());
+            entity.setPowerZone6Seconds(dto.powerZone6Seconds());
+            entity.setPowerZone7Seconds(dto.powerZone7Seconds());
+            entity.setLapCount(dto.lapCount());
+            entity.setStrokes(dto.strokes());
+            entity.setAvgRespirationRate(dto.avgRespirationRate());
+            entity.setMinTemperature(dto.minTemperature());
+            entity.setMaxTemperature(dto.maxTemperature());
+            entity.setVo2maxValue(dto.vo2maxValue());
+            entity.setDeviceId(dto.deviceId());
+            if (existing == null) {
+                activityMapper.insert(entity);
+            } else {
+                activityMapper.updateById(entity);
+            }
+            affected++;
+        }
+        return affected;
+    }
+
+    /**
+     * Garmin 的时长字段是浮点秒，存库前取整。
+     *
+     * @param value 浮点秒
+     * @return 整数秒，入参为空时返回 null
+     */
+    private Integer toInt(Double value) {
+        return value == null ? null : (int) Math.round(value);
+    }
+
     private LocalDate parseDate(String value) {
         if (value == null || value.isBlank()) {
             return null;
@@ -401,8 +498,11 @@ public class SyncServiceImpl implements SyncService {
         if (value == null || value.isBlank()) {
             return null;
         }
+        // Garmin 原始格式是 "yyyy-MM-dd HH:mm:ss"，采集器会转成 ISO；
+        // 两种都接受，避免任一侧格式变动导致时间列静默为空。
+        String normalized = value.trim().replace(' ', 'T');
         try {
-            return LocalDateTime.parse(value);
+            return LocalDateTime.parse(normalized);
         } catch (DateTimeParseException exception) {
             log.warn("采集器上报了无法解析的时间: {}", value);
             return null;

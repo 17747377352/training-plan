@@ -8,11 +8,14 @@ import com.trainingplan.platform.dto.sync.DailyHealthDto;
 import com.trainingplan.platform.dto.sync.HrvRecordDto;
 import com.trainingplan.platform.dto.sync.SleepRecordDto;
 import com.trainingplan.platform.dto.sync.SyncIngestRequest;
+import com.trainingplan.platform.dto.sync.ActivityDto;
+import com.trainingplan.platform.entity.Activity;
 import com.trainingplan.platform.entity.DailyHealth;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.entity.HrvRecord;
 import com.trainingplan.platform.entity.SleepRecord;
 import com.trainingplan.platform.entity.SyncJob;
+import com.trainingplan.platform.mapper.ActivityMapper;
 import com.trainingplan.platform.mapper.DailyHealthMapper;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.mapper.HrvRecordMapper;
@@ -54,6 +57,8 @@ class SyncServiceTest {
     @Mock
     private GarminAccountMapper accountMapper;
     @Mock
+    private ActivityMapper activityMapper;
+    @Mock
     private DailyHealthMapper dailyHealthMapper;
     @Mock
     private SleepRecordMapper sleepRecordMapper;
@@ -70,8 +75,9 @@ class SyncServiceTest {
 
     @BeforeEach
     void setUp() {
-        syncService = new SyncServiceImpl(syncJobMapper, accountMapper, dailyHealthMapper,
-                sleepRecordMapper, hrvRecordMapper, tokenCipher, redisTemplate, new ObjectMapper());
+        syncService = new SyncServiceImpl(syncJobMapper, accountMapper, activityMapper,
+                dailyHealthMapper, sleepRecordMapper, hrvRecordMapper, tokenCipher, redisTemplate,
+                new ObjectMapper());
         ReflectionTestUtils.setField(syncService, "taskQueue", "training-plan:sync:jobs");
     }
 
@@ -137,7 +143,8 @@ class SyncServiceTest {
                 List.of(new DailyHealthDto("2026-09-20", 2795, 2280.0, 1481.0, 300.0, 51, 45, 120, 20, 61, 20)),
                 List.of(new SleepRecordDto("2026-09-20", "2026-09-19T17:00:00", "2026-09-20T00:00:00",
                         26460, 6720, 15000, 3000, 600, 80, 52.3, 96.0, 14.2)),
-                List.of(new HrvRecordDto("2026-09-20", 70.0, 79.0, "UNBALANCED", 79.0, 80.0, 107.0))));
+                List.of(new HrvRecordDto("2026-09-20", 70.0, 79.0, "UNBALANCED", 79.0, 80.0, 107.0)),
+                List.of()));
 
         verify(dailyHealthMapper).insert(any(DailyHealth.class));
         verify(sleepRecordMapper).insert(any(SleepRecord.class));
@@ -155,7 +162,8 @@ class SyncServiceTest {
                 List.of(new DailyHealthDto("2026-09-20", 1, null, null, null, null, null, null, null, null, null)),
                 List.of(new SleepRecordDto("2026-09-20", "2026-09-19T17:00:00", null,
                         null, null, null, null, null, null, null, null, null)),
-                List.of(new HrvRecordDto("2026-09-20", 70.0, null, null, null, null, null))));
+                List.of(new HrvRecordDto("2026-09-20", 70.0, null, null, null, null, null)),
+                List.of()));
 
         verify(dailyHealthMapper).updateById(any(DailyHealth.class));
         verify(sleepRecordMapper).updateById(any(SleepRecord.class));
@@ -171,6 +179,7 @@ class SyncServiceTest {
         syncService.ingest(1L, new SyncIngestRequest(
                 List.of(new DailyHealthDto("not-a-date", 1, null, null, null, null, null, null, null, null, null)),
                 List.of(new SleepRecordDto("2026-09-20", "bad-time", null, null, null, null, null, null, null, null, null, null)),
+                List.of(),
                 List.of()));
 
         verify(dailyHealthMapper, never()).insert(any(DailyHealth.class));
@@ -302,6 +311,72 @@ class SyncServiceTest {
 
         assertThat(syncService.triggerScheduledSync(404L, 1)).isNull();
         verify(syncJobMapper, never()).insert(any(SyncJob.class));
+    }
+
+    @Test
+    void shouldInsertCyclingActivityWithRealFieldNames() {
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+        when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(),
+                List.of(new ActivityDto(12345678901L, "road_biking", 10, 2, "公路骑行",
+                        "2026-09-19T00:53:51", "2026-09-19T08:53:51",
+                        15299.0, 15280.0, 23489.0, 103550.0, 2322.0, 1907.0, 700.0, 1384.0, 503.0,
+                        6.777, 15.8, 156.0, 185.0, 2592.0, 1200.0,
+                        148.0, 388.0, 186.0, 216.0, 0.87, 321.6,
+                        77.0, 101.0, 56.0, 5.0, 1.2, "LACTATE_THRESHOLD", 220.0,
+                        408.0, 1192.0, 1683.0, 916.0, 258.0, 70.0, 11.0,
+                        21, 15930.0, 34.0, 19.0, 33.0, 59.0, 3355668899L))));
+
+        ArgumentCaptor<Activity> captor = ArgumentCaptor.forClass(Activity.class);
+        verify(activityMapper).insert(captor.capture());
+        Activity saved = captor.getValue();
+        assertThat(saved.getActivityTypeKey()).isEqualTo("road_biking");
+        assertThat(saved.getNormPower()).isEqualTo(186.0);
+        assertThat(saved.getTrainingStressScore()).isEqualTo(321.6);
+        assertThat(saved.getAvgLeftBalance()).isEqualTo(56.0);
+        assertThat(saved.getPowerZone4Seconds()).isEqualTo(916.0);
+        // 浮点秒落库前取整
+        assertThat(saved.getMovingDurationSeconds()).isEqualTo(15280);
+        assertThat(saved.getAverageHr()).isEqualTo(156);
+    }
+
+    @Test
+    void shouldUpdateActivityOnReSync() {
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+        when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(new Activity());
+
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(),
+                List.of(new ActivityDto(2L, "cycling", 2, 17, "骑行", null, null,
+                        null, null, null, null, null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null))));
+
+        verify(activityMapper).updateById(any(Activity.class));
+        verify(activityMapper, never()).insert(any(Activity.class));
+    }
+
+    @Test
+    void shouldParseBothSpaceAndIsoSeparatedTimes() {
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+        when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(),
+                List.of(new ActivityDto(1L, "road_biking", 10, 2, "骑行",
+                        "2026-09-19 00:53:51", "2026-09-19T08:53:51",
+                        null, null, null, null, null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null))));
+
+        ArgumentCaptor<Activity> captor = ArgumentCaptor.forClass(Activity.class);
+        verify(activityMapper).insert(captor.capture());
+        // 空格分隔与 ISO 分隔都应解析成功
+        assertThat(captor.getValue().getStartTimeGmt()).isNotNull();
+        assertThat(captor.getValue().getStartTimeLocal()).isNotNull();
     }
 
     private GarminAccount boundAccount() {

@@ -111,3 +111,95 @@ def test_safe_swallows_single_point_failure():
         raise RuntimeError("garmin 该日无数据")
 
     assert build_worker()._safe(boom) is None
+
+
+def test_activity_row_uses_real_garmin_field_names():
+    """字段名依据 2026-09-21 实拉核对，写错就会静默丢数据。"""
+
+    activity = {
+        "activityId": 12345678901,
+        "activityName": "丰台区 公路骑行",
+        "activityType": {"typeId": 10, "typeKey": "road_biking", "parentTypeId": 2},
+        "startTimeGMT": "2026-09-19 00:53:51",
+        "startTimeLocal": "2026-09-19 08:53:51",
+        "duration": 15299.0,
+        "movingDuration": 15280.0,
+        "elapsedDuration": 23489.0,
+        "distance": 103550.0,
+        "elevationGain": 2322.0,
+        "averageSpeed": 6.777,
+        "averageHR": 156.0,
+        "maxHR": 185.0,
+        "calories": 2592.0,
+        "avgPower": 148.0,
+        "normPower": 186.0,
+        "max20MinPower": 216.0,
+        "intensityFactor": 0.87,
+        "trainingStressScore": 321.6,
+        "averageBikingCadenceInRevPerMinute": 77.0,
+        "avgLeftBalance": 56.0,
+        "powerTimeInZone_1": 408.0,
+        "powerTimeInZone_4": 916.0,
+        "powerTimeInZone_7": 11.0,
+        "vO2MaxValue": 59.0,
+        "deviceId": 3355668899,
+        # 以下字段刻意不应被采集
+        "locationName": "丰台区",
+        "startLatitude": 39.85,
+        "startLongitude": 116.28,
+        "ownerFullName": "某姓名",
+    }
+
+    row = build_worker()._activity_row(activity)
+
+    assert row is not None
+    assert row["garminActivityId"] == 12345678901
+    assert row["activityTypeKey"] == "road_biking"
+    assert row["parentTypeId"] == 2
+    assert row["normPower"] == 186.0
+    assert row["trainingStressScore"] == 321.6
+    assert row["max20minPower"] == 216.0
+    # 踏频来自 averageBikingCadenceInRevPerMinute，不是 avgCadence
+    assert row["avgCadence"] == 77.0
+    assert row["avgLeftBalance"] == 56.0
+    assert row["powerZone1Seconds"] == 408.0
+    assert row["powerZone4Seconds"] == 916.0
+    assert row["powerZone7Seconds"] == 11.0
+    assert row["vo2maxValue"] == 59.0
+    # 隐私字段不得出现在上报内容里
+    joined = " ".join(row.keys())
+    for forbidden in ("location", "Latitude", "Longitude", "owner"):
+        assert forbidden.lower() not in joined.lower()
+
+
+def test_activity_row_skipped_without_id():
+    assert build_worker()._activity_row({"activityName": "无 ID"}) is None
+
+
+def test_activity_row_tolerates_missing_type():
+    row = build_worker()._activity_row({"activityId": 1})
+
+    assert row is not None
+    assert row["activityTypeKey"] is None
+    assert row["distanceMeters"] is None
+
+
+def test_activity_time_fields_converted_to_iso():
+    """Garmin 用空格分隔时间，直接透传会让平台的时间列全为空。"""
+
+    row = build_worker()._activity_row({
+        "activityId": 1,
+        "startTimeGMT": "2026-09-19 00:53:51",
+        "startTimeLocal": "2026-09-19 08:53:51",
+    })
+
+    assert row is not None
+    assert row["startTimeGmt"] == "2026-09-19T00:53:51"
+    assert row["startTimeLocal"] == "2026-09-19T08:53:51"
+
+
+def test_activity_time_fields_tolerate_missing_values():
+    row = build_worker()._activity_row({"activityId": 1, "startTimeGMT": None})
+
+    assert row is not None
+    assert row["startTimeGmt"] is None
