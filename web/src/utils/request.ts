@@ -65,7 +65,9 @@ client.interceptors.response.use(
 
     const message =
       error.response?.data?.message ||
-      (error.code === "ECONNABORTED" ? "请求超时，请稍后重试" : error.message) ||
+      (error.code === "ECONNABORTED"
+        ? "请求超时，请稍后重试"
+        : error.message) ||
       "网络请求失败";
     ElMessage.error(message);
     return Promise.reject(error);

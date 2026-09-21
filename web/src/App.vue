@@ -1,14 +1,23 @@
+<script setup lang="ts">
+import { computed } from "vue";
+import { useRoute } from "vue-router";
+
+const route = useRoute();
+const isPublicPage = computed(() => Boolean(route.meta.public));
+</script>
+
 <template>
-  <el-container class="app-shell">
-    <el-header class="app-header">
-      <div>
+  <div v-if="isPublicPage" class="public-shell">
+    <header class="public-header">
+      <div class="brand-lockup">
         <span class="brand-mark">TP</span>
-        <strong>Training Plan</strong>
+        <div>
+          <strong>Training Plan</strong>
+          <span>Garmin 数据管理平台</span>
+        </div>
       </div>
-      <span class="subtitle">Garmin 数据管理平台</span>
-    </el-header>
-    <el-main>
-      <router-view />
-    </el-main>
-  </el-container>
+    </header>
+    <router-view />
+  </div>
+  <router-view v-else />
 </template>

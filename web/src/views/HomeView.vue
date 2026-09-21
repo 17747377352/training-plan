@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
+import FeaturePanel from "../components/FeaturePanel.vue";
+import PageHeading from "../components/PageHeading.vue";
 import { getSystemStatus } from "../api/system";
-import { useAuthStore } from "../stores/auth";
 import type { SystemStatus } from "../types/api";
 
-const authStore = useAuthStore();
 const router = useRouter();
 const loading = ref(false);
 const errorMessage = ref("");
@@ -29,34 +29,24 @@ async function loadStatus() {
   }
 }
 
-async function handleLogout(): Promise<void> {
-  await authStore.logout();
-  await router.replace("/login");
-}
-
 onMounted(async () => {
-  await Promise.all([loadStatus(), authStore.loadProfile()]);
+  await loadStatus();
 });
 </script>
 
 <template>
   <section class="page-container">
-    <header class="page-heading dashboard-heading">
-      <div>
-        <h1>数据管理后台</h1>
-        <p>管理 Garmin 账号、同步任务与个人训练数据。</p>
-      </div>
-      <div class="user-actions">
-        <div>
-          <strong>{{ authStore.profile?.username || "用户" }}</strong>
-          <span>{{ authStore.profile?.email }}</span>
-        </div>
+    <PageHeading
+      eyebrow="数据工作台"
+      title="概览"
+      description="查看平台状态和数据能力，进入各模块管理训练数据。"
+    >
+      <template #actions>
         <el-button type="primary" @click="router.push('/garmin')"
-          >Garmin 账号</el-button
+          >管理 Garmin 账号</el-button
         >
-        <el-button @click="handleLogout">退出登录</el-button>
-      </div>
-    </header>
+      </template>
+    </PageHeading>
 
     <el-card v-loading="loading" class="status-card">
       <el-alert
@@ -88,5 +78,34 @@ onMounted(async () => {
         </el-tag>
       </div>
     </el-card>
+
+    <div class="section-heading">
+      <div>
+        <h2>数据能力</h2>
+        <p>采集链路已经接入，查询与展示页面将逐步开放。</p>
+      </div>
+    </div>
+    <div class="feature-grid">
+      <FeaturePanel
+        title="每日健康"
+        description="步数、距离、静息心率、压力和身体电量。"
+        status="已接入"
+      />
+      <FeaturePanel
+        title="睡眠与 HRV"
+        description="睡眠阶段、评分、夜间 HRV 与个人基准。"
+        status="已接入"
+      />
+      <FeaturePanel
+        title="骑行活动"
+        description="距离、爬升、功率、TSS、IF 与功率区间。"
+        status="已接入"
+      />
+      <FeaturePanel
+        title="趋势分析"
+        description="查询接口与图表仍在开发，当前菜单提供页面骨架。"
+        status="开发中"
+      />
+    </div>
   </section>
 </template>

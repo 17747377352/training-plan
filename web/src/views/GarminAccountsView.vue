@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
-import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
+import PageHeading from "../components/PageHeading.vue";
 import {
   connectAccount,
   deleteAccount,
@@ -12,9 +12,11 @@ import {
   updateAutoSync,
   verifyAccount,
 } from "../api/garmin";
-import type { GarminAccount, GarminAuthStatus, GarminRegion } from "../types/api";
-
-const router = useRouter();
+import type {
+  GarminAccount,
+  GarminAuthStatus,
+  GarminRegion,
+} from "../types/api";
 
 const accounts = ref<GarminAccount[]>([]);
 const loading = ref(false);
@@ -59,7 +61,10 @@ const STATUS_LABELS: Record<GarminAuthStatus, string> = {
   REAUTH_REQUIRED: "需要重新认证",
 };
 
-const STATUS_TAG_TYPES: Record<GarminAuthStatus, "success" | "info" | "warning" | "danger"> = {
+const STATUS_TAG_TYPES: Record<
+  GarminAuthStatus,
+  "success" | "info" | "warning" | "danger"
+> = {
   PENDING: "info",
   PENDING_MFA: "warning",
   ACTIVE: "success",
@@ -176,7 +181,9 @@ async function handleBackfill(agree: boolean) {
   try {
     await triggerSync(accountId, INITIAL_BACKFILL_DAYS);
     backfillDialogVisible.value = false;
-    ElMessage.success(`已提交首次拉取（最近 ${INITIAL_BACKFILL_DAYS} 天），同步完成后即可查看`);
+    ElMessage.success(
+      `已提交首次拉取（最近 ${INITIAL_BACKFILL_DAYS} 天），同步完成后即可查看`,
+    );
     await loadAccounts();
   } catch {
     // 错误提示由拦截器统一处理
@@ -222,7 +229,8 @@ async function handleImportToken() {
   }
 }
 
-async function handleVerify(account: GarminAccount) {  verifyingId.value = account.id;
+async function handleVerify(account: GarminAccount) {
+  verifyingId.value = account.id;
   try {
     await verifyAccount(account.id);
     ElMessage.success("令牌有效，账号可正常使用");
@@ -262,13 +270,11 @@ onMounted(loadAccounts);
 
 <template>
   <section class="page-container">
-    <header class="page-heading">
-      <div>
-        <h1>Garmin 账号</h1>
-        <p>绑定 Garmin 账号后，平台才能同步你的健康与训练数据。</p>
-      </div>
-      <el-button @click="router.push('/')">返回数据管理</el-button>
-    </header>
+    <PageHeading
+      eyebrow="数据来源"
+      title="Garmin 账号"
+      description="绑定 Garmin 账号，管理认证状态、自动同步和历史数据回填。"
+    />
 
     <el-card class="connect-card">
       <template #header>
@@ -312,8 +318,10 @@ onMounted(loadAccounts);
       </el-form>
       <el-alert type="info" :closable="false" class="connect-hint">
         <template #default>
-          Garmin 会对程序登录做限流或人机验证，此时可改用「导入令牌」：在浏览器登录
-          connect.garmin.com 后取得令牌交给平台，之后由平台自动刷新，无需重复登录。
+          Garmin
+          会对程序登录做限流或人机验证，此时可改用「导入令牌」：在浏览器登录
+          connect.garmin.com
+          后取得令牌交给平台，之后由平台自动刷新，无需重复登录。
         </template>
       </el-alert>
     </el-card>
@@ -331,7 +339,9 @@ onMounted(loadAccounts);
         :closable="false"
       >
         <template #default>
-          <el-button type="primary" link @click="loadAccounts">重新加载</el-button>
+          <el-button type="primary" link @click="loadAccounts"
+            >重新加载</el-button
+          >
         </template>
       </el-alert>
 
@@ -356,12 +366,16 @@ onMounted(loadAccounts);
               :active-value="1"
               :inactive-value="0"
               :loading="switchingId === row.id"
-              @update:model-value="(value: number) => handleAutoSyncChange(row, value)"
+              @update:model-value="
+                (value: number) => handleAutoSyncChange(row, value)
+              "
             />
           </template>
         </el-table-column>
         <el-table-column label="最近同步" min-width="170">
-          <template #default="{ row }">{{ formatTime(row.lastSyncTime) }}</template>
+          <template #default="{ row }">{{
+            formatTime(row.lastSyncTime)
+          }}</template>
         </el-table-column>
         <el-table-column label="操作" width="190" fixed="right">
           <template #default="{ row }">
@@ -431,13 +445,16 @@ onMounted(loadAccounts);
       :close-on-click-modal="false"
     >
       <p class="mfa-hint">
-        账号绑定成功。是否现在拉取最近 <strong>{{ INITIAL_BACKFILL_DAYS }} 天</strong>的历史数据？
+        账号绑定成功。是否现在拉取最近
+        <strong>{{ INITIAL_BACKFILL_DAYS }} 天</strong>的历史数据？
       </p>
       <p class="mfa-hint">
         选择「暂不」也不影响使用：之后每天上午 9:00 会自动同步当日数据。
       </p>
       <template #footer>
-        <el-button :disabled="backfillRunning" @click="handleBackfill(false)">暂不</el-button>
+        <el-button :disabled="backfillRunning" @click="handleBackfill(false)"
+          >暂不</el-button
+        >
         <el-button
           type="primary"
           :loading="backfillRunning"

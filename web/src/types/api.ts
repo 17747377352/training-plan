@@ -29,10 +29,7 @@ export type GarminRegion = "GLOBAL" | "CN";
 
 /** Garmin 账号认证状态。 */
 export type GarminAuthStatus =
-  | "PENDING"
-  | "PENDING_MFA"
-  | "ACTIVE"
-  | "REAUTH_REQUIRED";
+  "PENDING" | "PENDING_MFA" | "ACTIVE" | "REAUTH_REQUIRED";
 
 export interface GarminAccount {
   id: number;
