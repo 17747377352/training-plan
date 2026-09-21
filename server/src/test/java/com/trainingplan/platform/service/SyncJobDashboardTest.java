@@ -18,6 +18,7 @@ import com.trainingplan.platform.mapper.DailyHealthMapper;
 import com.trainingplan.platform.mapper.FtpHistoryMapper;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.mapper.HrvRecordMapper;
+import com.trainingplan.platform.mapper.NapRecordMapper;
 import com.trainingplan.platform.mapper.TrainingStatusMapper;
 import com.trainingplan.platform.mapper.SleepRecordMapper;
 import com.trainingplan.platform.mapper.SyncJobMapper;
@@ -78,6 +79,8 @@ class SyncJobDashboardTest {
     @Mock
     private HrvRecordMapper hrvRecordMapper;
     @Mock
+    private NapRecordMapper napRecordMapper;
+    @Mock
     private TrainingStatusMapper trainingStatusMapper;
     @Mock
     private FtpHistoryMapper ftpHistoryMapper;
@@ -101,7 +104,7 @@ class SyncJobDashboardTest {
         TableInfoHelper.initTableInfo(assistant, SyncJob.class);
         TableInfoHelper.initTableInfo(assistant, GarminAccount.class);
         syncService = new SyncServiceImpl(syncJobMapper, accountMapper, activityMapper,
-                dailyHealthMapper, sleepRecordMapper, hrvRecordMapper, trainingStatusMapper,
+                dailyHealthMapper, sleepRecordMapper, hrvRecordMapper, napRecordMapper, trainingStatusMapper,
                 ftpHistoryMapper, activityHrZoneMapper, tokenCipher, redisTemplate,
                 new ObjectMapper(), userService);
         ReflectionTestUtils.setField(syncService, "taskQueue", "training-plan:sync:jobs");

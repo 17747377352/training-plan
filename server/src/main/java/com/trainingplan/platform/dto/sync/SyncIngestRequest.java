@@ -8,6 +8,7 @@ import java.util.Map;
  *
  * @param dailyHealth     每日健康
  * @param sleep           睡眠
+ * @param naps            午睡（不参与判灯，仅记录）
  * @param hrv             HRV
  * @param activities      骑行活动
  * @param trainingStatus  每日训练状态与负荷
@@ -18,6 +19,7 @@ import java.util.Map;
  */
 public record SyncIngestRequest(List<DailyHealthDto> dailyHealth,
                                 List<SleepRecordDto> sleep,
+                                List<NapRecordDto> naps,
                                 List<HrvRecordDto> hrv,
                                 List<ActivityDto> activities,
                                 List<TrainingStatusDto> trainingStatus,

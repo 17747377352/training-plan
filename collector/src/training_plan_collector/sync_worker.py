@@ -67,6 +67,18 @@ def _datetime_to_iso(value: Any) -> str | None:
     return text.replace(" ", "T", 1)
 
 
+def _iso_text(value: Any) -> str | None:
+    """午睡的起止时间在响应里已是 ISO 文本（GMT），只做规范化与 T 分隔。"""
+
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    # 秒级精度足够；去掉可能存在的毫秒或时区后缀
+    return text.replace(" ", "T", 1).split(".")[0].replace("Z", "")
+
+
 def _gmt_to_iso(millis: Any) -> str | None:
     """Garmin 的毫秒时间戳转 GMT ISO 字符串。"""
 
@@ -218,6 +230,7 @@ class SyncWorker:
         start, end = days[0], days[-1]
         daily: list[dict[str, Any]] = []
         sleep: list[dict[str, Any]] = []
+        naps: dict[Any, dict[str, Any]] = {}
         training: list[dict[str, Any]] = []
         activities: dict[Any, dict[str, Any]] = {}
 
@@ -231,6 +244,9 @@ class SyncWorker:
                 row = self._sleep_row(raw_sleep[1], day)
                 if row is not None:
                     sleep.append(row)
+                # 午睡单独收集：它不参与判灯，但不能丢
+                for nap in self._nap_rows(raw_sleep[1]):
+                    naps[nap["napStartGmt"]] = nap
 
             # 逐日查询返回的是那一天的快照（实测急性负荷随日期变化），可以按日回补
             raw_status = self._safe(lambda d=day: adapter.client.get_training_status(d))
@@ -264,6 +280,7 @@ class SyncWorker:
         return {
             "dailyHealth": daily,
             "sleep": sleep,
+            "naps": sorted(naps.values(), key=lambda r: r["napStartGmt"]),
             "hrv": hrv,
             "activities": list(activities.values()),
             "trainingStatus": training,
@@ -446,6 +463,34 @@ class SyncWorker:
             "avgSpo2": dto.get("averageSpO2Value") or spo2_summary.get("averageSPO2"),
             "avgRespiration": dto.get("averageRespirationValue"),
         }
+
+    @staticmethod
+    def _nap_rows(raw: dict[str, Any]) -> list[dict[str, Any]]:
+        """把当天的午睡转换为平台字段。
+
+        午睡在 ``dailySleepDTO.dailyNapDTOS`` 里，是数组——一天可能睡多次，
+        所以按数组逐条产出，而不是只取 ``napTimeSeconds`` 合计。
+
+        只用这个列表作为来源：它带 ``napStartTimestampGMT``，平台靠该起点做
+        幂等去重（与主睡眠用 sleepStartTimestampGMT 去重同理）。没有起点的
+        条目跳过——宁可少一条，也不能在重复同步时累积出多行。
+        """
+
+        dto = raw.get("dailySleepDTO") or {}
+        rows: list[dict[str, Any]] = []
+        for nap in dto.get("dailyNapDTOS") or []:
+            start = nap.get("napStartTimestampGMT")
+            if not start:
+                continue
+            rows.append({
+                "calendarDate": nap.get("calendarDate") or dto.get("calendarDate"),
+                "napStartGmt": _iso_text(start),
+                "napEndGmt": _iso_text(nap.get("napEndTimestampGMT")),
+                "napSeconds": nap.get("napTimeSec"),
+                "napFeedback": nap.get("napFeedback"),
+                "napSource": nap.get("napSource"),
+            })
+        return rows
 
     @staticmethod
     def _activity_row(activity: dict[str, Any]) -> dict[str, Any] | None:

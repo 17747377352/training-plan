@@ -606,7 +606,7 @@ def test_collect_uses_hrv_range_endpoint_and_returns_all_payload_keys():
     assert result["ftpHistory"] == [{"effectiveDate": "2026-08-29", "ftpWatts": 213}]
     # 载荷键名与平台 SyncIngestRequest 的字段一一对应
     assert set(result) == {
-        "dailyHealth", "sleep", "hrv", "activities",
+        "dailyHealth", "sleep", "naps", "hrv", "activities",
         "trainingStatus", "ftpHistory", "activityHrZones",
     }
 
@@ -633,3 +633,89 @@ def test_ftp_rows_requests_bounded_window():
     span = (date.fromisoformat(seen["end"]) - date.fromisoformat(seen["start"])).days
     assert span <= 366, f"FTP 历史窗口 {span} 天会被 Garmin 拒绝"
     assert rows == [{"effectiveDate": "2026-08-22", "ftpWatts": 216}]
+
+
+NAPS = [
+    {"calendarDate": "2026-09-21", "napTimeSec": 2580,
+     "napStartTimestampGMT": "2026-09-21T05:27:17", "napEndTimestampGMT": "2026-09-21T06:10:17",
+     "napFeedback": "IDEAL_TIMING_LONG_DURATION_LOW_NEED", "napSource": 0},
+]
+
+
+def test_nap_rows_read_daily_nap_list():
+    """午睡在 dailySleepDTO.dailyNapDTOS 里，是数组——一天可能睡多次。"""
+
+    rows = build_worker()._nap_rows({"dailySleepDTO": {"calendarDate": "2026-09-21",
+                                                      "dailyNapDTOS": NAPS}})
+
+    assert rows == [{
+        "calendarDate": "2026-09-21",
+        "napStartGmt": "2026-09-21T05:27:17",
+        "napEndGmt": "2026-09-21T06:10:17",
+        "napSeconds": 2580,
+        "napFeedback": "IDEAL_TIMING_LONG_DURATION_LOW_NEED",
+        "napSource": 0,
+    }]
+
+
+def test_nap_rows_keep_every_nap_of_the_day():
+    """单列合计会丢掉第二次午睡，所以必须逐条产出。"""
+
+    twice = NAPS + [{"calendarDate": "2026-09-21", "napTimeSec": 1200,
+                     "napStartTimestampGMT": "2026-09-21T09:00:00"}]
+
+    rows = build_worker()._nap_rows({"dailySleepDTO": {"dailyNapDTOS": twice}})
+
+    assert [r["napSeconds"] for r in rows] == [2580, 1200]
+
+
+def test_nap_rows_skip_entries_without_start_timestamp():
+    """没有起点就无法幂等去重，宁可少一条也不能在重复同步时累积多行。"""
+
+    no_start = [{"napTimeSec": 600}, {"napStartTimestampGMT": "", "napTimeSec": 600}]
+
+    assert build_worker()._nap_rows({"dailySleepDTO": {"dailyNapDTOS": no_start}}) == []
+
+
+def test_nap_rows_empty_when_no_nap():
+    assert build_worker()._nap_rows({"dailySleepDTO": {"napTimeSeconds": 0}}) == []
+    assert build_worker()._nap_rows({}) == []
+
+
+def test_collect_payload_includes_naps(monkeypatch):
+    """载荷必须带上 naps，且午睡不混进 sleep 列表。"""
+
+    class _Client:
+        def get_hrv_data_range(self, start, end):
+            return {"hrvSummaries": []}
+
+        def get_training_status(self, day):
+            return {}
+
+        def get_activities_by_date(self, start, end, kind=None, order=None):
+            return []
+
+        def get_functional_threshold_power_range(self, start, end, sport=None):
+            return []
+
+        def get_cycling_ftp(self):
+            return {}
+
+    class _Adapter:
+        client = _Client()
+
+        def get_daily_stats(self, day):
+            return None
+
+        def get_sleep_data(self, day):
+            return (None, {"dailySleepDTO": {"calendarDate": day,
+                                            "sleepStartTimestampGMT": 1758330000000,
+                                            "sleepTimeSeconds": 19072,
+                                            "dailyNapDTOS": NAPS}})
+
+    result = build_worker()._collect(_Adapter(), "2026-09-21", "2026-09-21", "GLOBAL")
+
+    assert len(result["sleep"]) == 1
+    assert result["sleep"][0]["sleepTimeSeconds"] == 19072
+    assert [n["napSeconds"] for n in result["naps"]] == [2580]
+    assert "naps" in result

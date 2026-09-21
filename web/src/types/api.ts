@@ -190,6 +190,10 @@ export interface SleepTrend {
   avgSleepHrv?: number | null;
   avgSpo2?: number | null;
   avgRespiration?: number | null;
+  /** 当日午睡合计（秒）。不含在 sleepTimeSeconds 内，也不参与判灯。 */
+  napSeconds?: number | null;
+  /** 当日午睡次数。 */
+  napCount?: number | null;
 }
 
 export interface SyncJobQuery {

@@ -10,10 +10,12 @@ import com.trainingplan.platform.dto.health.TrendQuery;
 import com.trainingplan.platform.entity.DailyHealth;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.entity.HrvRecord;
+import com.trainingplan.platform.entity.NapRecord;
 import com.trainingplan.platform.entity.SleepRecord;
 import com.trainingplan.platform.mapper.DailyHealthMapper;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.mapper.HrvRecordMapper;
+import com.trainingplan.platform.mapper.NapRecordMapper;
 import com.trainingplan.platform.mapper.SleepRecordMapper;
 import com.trainingplan.platform.service.HealthTrendService;
 import com.trainingplan.platform.service.UserService;
@@ -22,7 +24,9 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 当前用户健康趋势查询实现。
@@ -42,6 +46,7 @@ public class HealthTrendServiceImpl implements HealthTrendService {
 
     private final DailyHealthMapper dailyHealthMapper;
     private final HrvRecordMapper hrvRecordMapper;
+    private final NapRecordMapper napRecordMapper;
     private final SleepRecordMapper sleepRecordMapper;
     private final GarminAccountMapper garminAccountMapper;
     private final UserService userService;
@@ -84,6 +89,15 @@ public class HealthTrendServiceImpl implements HealthTrendService {
         if (context.accountIds().isEmpty()) {
             return List.of();
         }
+        // 当日午睡合计：只用于展示，不并入 sleepTimeSeconds，也不参与判灯
+        Map<LocalDate, int[]> napTotals = new HashMap<>();
+        for (NapRecord nap : napRecordMapper.selectList(Wrappers.<NapRecord>lambdaQuery()
+                .in(NapRecord::getGarminAccountId, context.accountIds())
+                .between(NapRecord::getCalendarDate, context.startDate(), context.endDate()))) {
+            int[] total = napTotals.computeIfAbsent(nap.getCalendarDate(), key -> new int[2]);
+            total[0] += nap.getNapSeconds() == null ? 0 : nap.getNapSeconds();
+            total[1] += 1;
+        }
         return sleepRecordMapper.selectList(Wrappers.<SleepRecord>lambdaQuery()
                         .in(SleepRecord::getGarminAccountId, context.accountIds())
                         .between(SleepRecord::getCalendarDate, context.startDate(), context.endDate())
@@ -91,7 +105,7 @@ public class HealthTrendServiceImpl implements HealthTrendService {
                         .orderByAsc(SleepRecord::getSleepStartGmt)
                         .orderByAsc(SleepRecord::getId))
                 .stream()
-                .map(this::toSleepDto)
+                .map(row -> toSleepDto(row, napTotals.get(row.getCalendarDate())))
                 .toList();
     }
 
@@ -143,7 +157,7 @@ public class HealthTrendServiceImpl implements HealthTrendService {
                 entity.getBaselineBalancedUpper());
     }
 
-    private SleepTrendDto toSleepDto(SleepRecord entity) {
+    private SleepTrendDto toSleepDto(SleepRecord entity, int[] nap) {
         return new SleepTrendDto(
                 entity.getCalendarDate(),
                 entity.getSleepStartGmt(),
@@ -156,7 +170,9 @@ public class HealthTrendServiceImpl implements HealthTrendService {
                 entity.getSleepScore(),
                 entity.getAvgSleepHrv(),
                 entity.getAvgSpo2(),
-                entity.getAvgRespiration());
+                entity.getAvgRespiration(),
+                nap == null ? 0 : nap[0],
+                nap == null ? 0 : nap[1]);
     }
 
     private record QueryContext(LocalDate startDate, LocalDate endDate, List<Long> accountIds) {

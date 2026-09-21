@@ -16,5 +16,7 @@ public record SleepTrendDto(
         Integer sleepScore,
         Double avgSleepHrv,
         Double avgSpo2,
-        Double avgRespiration) {
+        Double avgRespiration,
+        Integer napSeconds,
+        Integer napCount) {
 }

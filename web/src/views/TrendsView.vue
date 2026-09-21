@@ -45,6 +45,10 @@ interface AggregatedSleep {
   avgSleepHrv: number | null;
   avgSpo2: number | null;
   avgRespiration: number | null;
+  /** 当日午睡合计（秒），日级数据，只用于展示、不参与判灯。 */
+  napSeconds: number | null;
+  /** 当日午睡次数。 */
+  napCount: number | null;
   mainSleepSeconds: number;
 }
 
@@ -124,6 +128,10 @@ const sleepByDate = computed(() => {
       current.awakeSleepSeconds,
       row.awakeSleepSeconds,
     );
+
+    // 午睡是日级数据（同一天各行相同），直接取用，不参与主睡眠的时长比较
+    current.napSeconds = row.napSeconds ?? null;
+    current.napCount = row.napCount ?? null;
 
     const duration = row.sleepTimeSeconds ?? 0;
     if (duration >= current.mainSleepSeconds) {
@@ -340,6 +348,8 @@ function emptyAggregatedSleep(): AggregatedSleep {
     avgSleepHrv: null,
     avgSpo2: null,
     avgRespiration: null,
+    napSeconds: null,
+    napCount: null,
     mainSleepSeconds: 0,
   };
 }
@@ -442,6 +452,18 @@ function statusTagType(
   if (normalized === "UNBALANCED") return "warning";
   if (normalized === "LOW" || normalized === "POOR") return "danger";
   return "info";
+}
+
+/**
+ * 夜间 + 午睡的当日合计，**只用于展示**。
+ *
+ * 判灯与异常标记仍只看 sleepHours()（夜间主睡眠），午睡不参与：
+ * 睡眠结构不同，是否计入恢复是单独的规则决策。
+ */
+function sumSleep(row: TrendRow): number | null {
+  const night = row.sleep?.sleepTimeSeconds;
+  if (night == null) return null;
+  return night + (row.sleep?.napSeconds ?? 0);
 }
 
 function sleepHours(row: TrendRow): number | null {
@@ -1014,8 +1036,24 @@ onBeforeUnmount(() => {
         <h3 class="day-detail-title">睡眠</h3>
         <dl class="day-detail-list">
           <div>
-            <dt>总时长</dt>
+            <dt>夜间睡眠</dt>
             <dd>{{ formatHours(selectedRow.sleep?.sleepTimeSeconds) }}</dd>
+          </div>
+          <div v-if="(selectedRow.sleep?.napSeconds ?? 0) > 0">
+            <dt>午睡</dt>
+            <dd>
+              {{ formatHours(selectedRow.sleep?.napSeconds) }}
+              <span class="nap-count"
+                >（{{ selectedRow.sleep?.napCount }} 次）</span
+              >
+            </dd>
+          </div>
+          <div v-if="(selectedRow.sleep?.napSeconds ?? 0) > 0">
+            <dt>当日合计</dt>
+            <dd>
+              {{ formatHours(sumSleep(selectedRow)) }}
+              <span class="nap-note">仅展示，不计入判灯</span>
+            </dd>
           </div>
           <div>
             <dt>评分</dt>

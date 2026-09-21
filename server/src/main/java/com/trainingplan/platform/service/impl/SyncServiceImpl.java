@@ -16,6 +16,7 @@ import com.trainingplan.platform.dto.sync.ActivityDto;
 import com.trainingplan.platform.dto.sync.DailyHealthDto;
 import com.trainingplan.platform.dto.sync.FtpHistoryDto;
 import com.trainingplan.platform.dto.sync.HrvRecordDto;
+import com.trainingplan.platform.dto.sync.NapRecordDto;
 import com.trainingplan.platform.dto.sync.SleepRecordDto;
 import com.trainingplan.platform.dto.sync.SyncIngestRequest;
 import com.trainingplan.platform.dto.sync.SyncJobDto;
@@ -29,6 +30,7 @@ import com.trainingplan.platform.entity.DailyHealth;
 import com.trainingplan.platform.entity.FtpHistory;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.entity.HrvRecord;
+import com.trainingplan.platform.entity.NapRecord;
 import com.trainingplan.platform.entity.SleepRecord;
 import com.trainingplan.platform.entity.SyncJob;
 import com.trainingplan.platform.entity.TrainingStatus;
@@ -38,6 +40,7 @@ import com.trainingplan.platform.mapper.DailyHealthMapper;
 import com.trainingplan.platform.mapper.FtpHistoryMapper;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.mapper.HrvRecordMapper;
+import com.trainingplan.platform.mapper.NapRecordMapper;
 import com.trainingplan.platform.mapper.SleepRecordMapper;
 import com.trainingplan.platform.mapper.SyncJobMapper;
 import com.trainingplan.platform.mapper.TrainingStatusMapper;
@@ -99,6 +102,7 @@ public class SyncServiceImpl implements SyncService {
     private final DailyHealthMapper dailyHealthMapper;
     private final SleepRecordMapper sleepRecordMapper;
     private final HrvRecordMapper hrvRecordMapper;
+    private final NapRecordMapper napRecordMapper;
     private final TrainingStatusMapper trainingStatusMapper;
     private final FtpHistoryMapper ftpHistoryMapper;
     private final ActivityHrZoneMapper activityHrZoneMapper;
@@ -263,14 +267,16 @@ public class SyncServiceImpl implements SyncService {
         int daily = upsertDailyHealth(accountId, request.dailyHealth());
         int sleep = upsertSleep(accountId, request.sleep());
         int hrv = upsertHrv(accountId, request.hrv());
+        // 午睡只入库，不参与判灯
+        int naps = upsertNaps(accountId, request.naps());
         int activities = upsertActivities(accountId, request.activities());
         int training = upsertTrainingStatus(accountId, request.trainingStatus());
         int ftp = upsertFtpHistory(accountId, request.ftpHistory());
         // 心率区间会先删后插，放在同一事务里，避免中途失败留下半份数据
         int zones = upsertActivityHrZones(accountId, request.activityHrZones());
-        log.info("同步数据已入库 jobId={} daily={} sleep={} hrv={} activity={} "
+        log.info("同步数据已入库 jobId={} daily={} sleep={} hrv={} nap={} activity={} "
                         + "training={} ftp={} hrZone={}",
-                jobId, daily, sleep, hrv, activities, training, ftp, zones);
+                jobId, daily, sleep, hrv, naps, activities, training, ftp, zones);
     }
 
     @Override
@@ -822,6 +828,47 @@ public class SyncServiceImpl implements SyncService {
                 trainingStatusMapper.insert(entity);
             } else {
                 trainingStatusMapper.updateById(entity);
+            }
+            affected++;
+        }
+        return affected;
+    }
+
+    /**
+     * 覆盖写入午睡记录，按 (账号, 午睡开始时间) 去重。
+     *
+     * <p>一天可有多条；没有开始时间的一律跳过，否则重复同步会累积出多行。</p>
+     *
+     * @param accountId 账号 ID
+     * @param rows      午睡列表
+     * @return 处理条数
+     */
+    private int upsertNaps(Long accountId, List<NapRecordDto> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return 0;
+        }
+        int affected = 0;
+        for (NapRecordDto dto : rows) {
+            LocalDateTime start = parseDateTime(dto.napStartGmt());
+            LocalDate date = parseDate(dto.calendarDate());
+            if (start == null || date == null) {
+                continue;
+            }
+            NapRecord existing = napRecordMapper.selectOne(Wrappers.<NapRecord>lambdaQuery()
+                    .eq(NapRecord::getGarminAccountId, accountId)
+                    .eq(NapRecord::getNapStartGmt, start));
+            NapRecord entity = existing == null ? new NapRecord() : existing;
+            entity.setGarminAccountId(accountId);
+            entity.setCalendarDate(date);
+            entity.setNapStartGmt(start);
+            entity.setNapEndGmt(parseDateTime(dto.napEndGmt()));
+            entity.setNapSeconds(dto.napSeconds());
+            entity.setNapFeedback(dto.napFeedback());
+            entity.setNapSource(dto.napSource());
+            if (existing == null) {
+                napRecordMapper.insert(entity);
+            } else {
+                napRecordMapper.updateById(entity);
             }
             affected++;
         }

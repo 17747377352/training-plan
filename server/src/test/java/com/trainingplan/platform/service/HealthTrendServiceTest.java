@@ -13,10 +13,12 @@ import com.trainingplan.platform.dto.health.TrendQuery;
 import com.trainingplan.platform.entity.DailyHealth;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.entity.HrvRecord;
+import com.trainingplan.platform.entity.NapRecord;
 import com.trainingplan.platform.entity.SleepRecord;
 import com.trainingplan.platform.mapper.DailyHealthMapper;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.mapper.HrvRecordMapper;
+import com.trainingplan.platform.mapper.NapRecordMapper;
 import com.trainingplan.platform.mapper.SleepRecordMapper;
 import com.trainingplan.platform.service.impl.HealthTrendServiceImpl;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -47,6 +49,8 @@ class HealthTrendServiceTest {
     @Mock
     private HrvRecordMapper hrvRecordMapper;
     @Mock
+    private NapRecordMapper napRecordMapper;
+    @Mock
     private SleepRecordMapper sleepRecordMapper;
     @Mock
     private GarminAccountMapper garminAccountMapper;
@@ -63,9 +67,11 @@ class HealthTrendServiceTest {
         TableInfoHelper.initTableInfo(assistant, DailyHealth.class);
         TableInfoHelper.initTableInfo(assistant, HrvRecord.class);
         TableInfoHelper.initTableInfo(assistant, SleepRecord.class);
+        TableInfoHelper.initTableInfo(assistant, NapRecord.class);
         healthTrendService = new HealthTrendServiceImpl(
                 dailyHealthMapper,
                 hrvRecordMapper,
+                napRecordMapper,
                 sleepRecordMapper,
                 garminAccountMapper,
                 userService);

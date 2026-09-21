@@ -2049,3 +2049,18 @@ body {
 .advice-goal .advice-link {
   margin-left: 6px;
 }
+
+/* 单日详情里的午睡与合计 */
+.nap-count {
+  color: #8792a1;
+  font-size: 12px;
+}
+
+.nap-note {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: #eef3f5;
+  color: #5b6b7c;
+  font-size: 11px;
+}

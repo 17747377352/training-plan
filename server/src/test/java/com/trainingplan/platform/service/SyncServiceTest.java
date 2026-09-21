@@ -10,6 +10,7 @@ import com.trainingplan.platform.dto.sync.ActivityHrZoneDto;
 import com.trainingplan.platform.dto.sync.DailyHealthDto;
 import com.trainingplan.platform.dto.sync.FtpHistoryDto;
 import com.trainingplan.platform.dto.sync.HrvRecordDto;
+import com.trainingplan.platform.dto.sync.NapRecordDto;
 import com.trainingplan.platform.dto.sync.TrainingStatusDto;
 import com.trainingplan.platform.dto.sync.SleepRecordDto;
 import com.trainingplan.platform.dto.sync.SyncIngestRequest;
@@ -20,6 +21,7 @@ import com.trainingplan.platform.entity.DailyHealth;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.entity.FtpHistory;
 import com.trainingplan.platform.entity.HrvRecord;
+import com.trainingplan.platform.entity.NapRecord;
 import com.trainingplan.platform.entity.TrainingStatus;
 import com.trainingplan.platform.entity.SleepRecord;
 import com.trainingplan.platform.entity.SyncJob;
@@ -29,6 +31,7 @@ import com.trainingplan.platform.mapper.DailyHealthMapper;
 import com.trainingplan.platform.mapper.FtpHistoryMapper;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.mapper.HrvRecordMapper;
+import com.trainingplan.platform.mapper.NapRecordMapper;
 import com.trainingplan.platform.mapper.TrainingStatusMapper;
 import com.trainingplan.platform.mapper.SleepRecordMapper;
 import com.trainingplan.platform.mapper.SyncJobMapper;
@@ -47,6 +50,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -79,6 +83,8 @@ class SyncServiceTest {
     @Mock
     private HrvRecordMapper hrvRecordMapper;
     @Mock
+    private NapRecordMapper napRecordMapper;
+    @Mock
     private TrainingStatusMapper trainingStatusMapper;
     @Mock
     private FtpHistoryMapper ftpHistoryMapper;
@@ -101,12 +107,12 @@ class SyncServiceTest {
         MybatisConfiguration configuration = new MybatisConfiguration();
         MapperBuilderAssistant assistant = new MapperBuilderAssistant(configuration, "sync-service-test");
         for (Class<?> entity : List.of(SyncJob.class, GarminAccount.class, DailyHealth.class,
-                SleepRecord.class, HrvRecord.class, Activity.class, TrainingStatus.class,
+                SleepRecord.class, HrvRecord.class, Activity.class, TrainingStatus.class, NapRecord.class,
                 FtpHistory.class, ActivityHrZone.class)) {
             TableInfoHelper.initTableInfo(assistant, entity);
         }
         syncService = new SyncServiceImpl(syncJobMapper, accountMapper, activityMapper,
-                dailyHealthMapper, sleepRecordMapper, hrvRecordMapper, trainingStatusMapper,
+                dailyHealthMapper, sleepRecordMapper, hrvRecordMapper, napRecordMapper, trainingStatusMapper,
                 ftpHistoryMapper, activityHrZoneMapper, tokenCipher, redisTemplate,
                 new ObjectMapper(), userService);
         ReflectionTestUtils.setField(syncService, "taskQueue", "training-plan:sync:jobs");
@@ -511,7 +517,7 @@ class SyncServiceTest {
         when(trainingStatusMapper.selectOne(any(Wrapper.class))).thenReturn(null);
 
         ingestOf(List.of(), List.of(), List.of(), List.of());
-        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(),
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(), List.of(),
                 List.of(new TrainingStatusDto("2026-09-21", 7, "PRODUCTIVE_6", 52, "OPTIMAL", 1.2,
                         819, 658, 526.4, 987.0,
                         157.42, 433, 952, 2161.64, 519, 1039, 231.98, 173, 519,
@@ -538,7 +544,7 @@ class SyncServiceTest {
         when(syncJobMapper.selectById(1L)).thenReturn(job());
         when(trainingStatusMapper.selectOne(any(Wrapper.class))).thenReturn(null);
 
-        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(),
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(), List.of(),
                 List.of(new TrainingStatusDto("2026-09-21", 7, null, null, null, null,
                         null, null, null, null, null, null, null, null, null, null,
                         null, null, null, null, null, null)),
@@ -556,7 +562,7 @@ class SyncServiceTest {
         when(syncJobMapper.selectById(1L)).thenReturn(job());
         when(ftpHistoryMapper.selectOne(any(Wrapper.class))).thenReturn(new FtpHistory());
 
-        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(),
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(new FtpHistoryDto("2026-08-22", 216)),
                 java.util.Map.of()));
 
@@ -572,7 +578,7 @@ class SyncServiceTest {
     void shouldSkipFtpRowWithoutUsableValue() {
         when(syncJobMapper.selectById(1L)).thenReturn(job());
 
-        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(),
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(new FtpHistoryDto("2026-08-22", null),
                         new FtpHistoryDto("2026-08-23", 0),
                         new FtpHistoryDto("not-a-date", 210)),
@@ -591,7 +597,7 @@ class SyncServiceTest {
         activity.setGarminActivityId(24415659141L);
         when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(activity);
 
-        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(),
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(),
                 java.util.Map.of(24415659141L, List.of(
                         new ActivityHrZoneDto(1, 100, 1476),
@@ -618,7 +624,7 @@ class SyncServiceTest {
         activity.setId(77L);
         when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(activity);
 
-        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(),
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(),
                 java.util.Map.of(24415659141L, List.of(new ActivityHrZoneDto(1, 100, 60)))));
 
@@ -632,6 +638,62 @@ class SyncServiceTest {
                 .getParamNameValuePairs().values()).contains(ACCOUNT_ID);
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void storesNapWithoutTouchingMainSleep() {
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+        when(napRecordMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(),
+                List.of(new NapRecordDto("2026-09-21", "2026-09-21T05:27:17", "2026-09-21T06:10:17",
+                        2580, "IDEAL_TIMING_LONG_DURATION_LOW_NEED", 0)),
+                List.of(), List.of(), List.of(), List.of(), java.util.Map.of()));
+
+        ArgumentCaptor<NapRecord> captor = ArgumentCaptor.forClass(NapRecord.class);
+        verify(napRecordMapper).insert(captor.capture());
+        NapRecord saved = captor.getValue();
+        assertThat(saved.getGarminAccountId()).isEqualTo(ACCOUNT_ID);
+        assertThat(saved.getCalendarDate()).isEqualTo(LocalDate.of(2026, 9, 21));
+        assertThat(saved.getNapSeconds()).isEqualTo(2580);
+        assertThat(saved.getNapStartGmt()).isEqualTo(LocalDateTime.of(2026, 9, 21, 5, 27, 17));
+        assertThat(saved.getNapFeedback()).isEqualTo("IDEAL_TIMING_LONG_DURATION_LOW_NEED");
+        // 午睡不得写进睡眠表，否则会污染判灯依据
+        verify(sleepRecordMapper, never()).insert(any(SleepRecord.class));
+        verify(sleepRecordMapper, never()).updateById(any(SleepRecord.class));
+    }
+
+    @Test
+    void skipsNapWithoutStartTimestampSoResyncCannotDuplicate() {
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(),
+                List.of(new NapRecordDto("2026-09-21", null, null, 600, null, null),
+                        new NapRecordDto(null, "2026-09-21T05:27:17", null, 600, null, null)),
+                List.of(), List.of(), List.of(), List.of(), java.util.Map.of()));
+
+        verify(napRecordMapper, never()).insert(any(NapRecord.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void updatesNapOnResyncByStartTime() {
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+        when(napRecordMapper.selectOne(any(Wrapper.class))).thenReturn(new NapRecord());
+
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(),
+                List.of(new NapRecordDto("2026-09-21", "2026-09-21T05:27:17", null, 2580, null, 0)),
+                List.of(), List.of(), List.of(), List.of(), java.util.Map.of()));
+
+        ArgumentCaptor<Wrapper<NapRecord>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(napRecordMapper).selectOne(captor.capture());
+        // 去重必须限定账号，否则同一起点时间会跨账号互相覆盖
+        assertThat(captor.getValue().getTargetSql())
+                .contains("garmin_account_id")
+                .contains("nap_start_gmt");
+        verify(napRecordMapper).updateById(any(NapRecord.class));
+        verify(napRecordMapper, never()).insert(any(NapRecord.class));
+    }
+
     /**
      * 只关心前四类数据的用例用这个重载，训练状态 / FTP / 心率区间传空列表。
      *
@@ -641,11 +703,12 @@ class SyncServiceTest {
      * @param activities 活动
      * @return 上报请求
      */
+    @SuppressWarnings("unused")
     private static SyncIngestRequest ingestOf(List<DailyHealthDto> daily,
                                               List<SleepRecordDto> sleep,
                                               List<HrvRecordDto> hrv,
                                               List<ActivityDto> activities) {
-        return new SyncIngestRequest(daily, sleep, hrv, activities,
+        return new SyncIngestRequest(daily, sleep, List.of(), hrv, activities,
                 List.of(), List.of(), java.util.Map.of());
     }
 

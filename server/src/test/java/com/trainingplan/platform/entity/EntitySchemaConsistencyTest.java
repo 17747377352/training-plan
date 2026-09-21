@@ -39,7 +39,7 @@ class EntitySchemaConsistencyTest {
             SysUser.class, SysRole.class, SysUserRole.class, GarminAccount.class,
             SyncJob.class, DailyHealth.class, SleepRecord.class, HrvRecord.class, Activity.class,
             TrainingStatus.class, FtpHistory.class, ActivityHrZone.class, DailyCheckin.class,
-            TrainingPlan.class, TrainingGoal.class);
+            TrainingPlan.class, TrainingGoal.class, NapRecord.class);
 
     private static final Pattern CREATE_TABLE =
             Pattern.compile("CREATE TABLE (\\w+)\\s*\\((.*?)\\n\\)\\s*ENGINE", Pattern.DOTALL);
