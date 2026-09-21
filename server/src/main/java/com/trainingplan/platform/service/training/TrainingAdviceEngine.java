@@ -15,7 +15,9 @@ import static com.trainingplan.platform.dto.training.TrainingAdviceDto.Light.*;
 /** 无 IO 的规则引擎。所有阈值是 v1 产品规则，详见 docs/训练建议规则.md。 */
 @Component
 public class TrainingAdviceEngine {
-    public static final String RULE_VERSION = "readiness-v1";
+    public static final String RULE_VERSION = "readiness-v2";
+    /** 放行绿灯所需的最少可用恢复维度；缺一项但无异常时仍给绿灯，但处方收紧。 */
+    private static final int MIN_SIGNALS_FOR_GREEN = 3;
     private static final int FTP_MAX_AGE_DAYS = 90;
     private static final int WEIGHT_MAX_AGE_DAYS = 14;
     private static final Set<String> NORMAL_TRAINING = Set.of("PRODUCTIVE", "MAINTAINING", "PEAKING");
@@ -41,18 +43,29 @@ public class TrainingAdviceEngine {
         List<Factor> recovery = factors.stream().filter(Factor::recoverySignal).toList();
         int available = (int) recovery.stream().filter(Factor::available).count();
         long warnings = recovery.stream().filter(f -> f.light() == YELLOW).count();
+        // readiness-v2：可用依据不足 3 项才压灯。缺一项但四个维度都没有异常时放行绿灯，
+        // 但处方按证据完整度收紧（详见 docs/训练建议规则.md 第三节）。
+        // readiness-v1 要求四项齐全，实测 200 天里绿灯 0 天，且与 Garmin 的
+        // AEROBIC_LOW_SHORTAGE 诊断冲突——引擎因缺一条手填数据而不给最该练的 Z2。
         Light light = recovery.stream().anyMatch(f -> f.light() == RED) || warnings >= 2 ? RED
-                : warnings > 0 || available < 4 ? YELLOW : GREEN;
+                : warnings > 0 || available < MIN_SIGNALS_FOR_GREEN ? YELLOW : GREEN;
         String headline = switch (light) {
-            case GREEN -> "绿灯 · 可以进行有氧训练";
+            case GREEN -> available < 4 ? "绿灯 · 可以训练（依据不全，已收紧）" : "绿灯 · 可以进行有氧训练";
             case RED -> "红灯 · 今天优先休息";
             default -> "黄灯 · 今天保守安排";
         };
-        String summary = light == RED
-                ? (warnings >= 2 ? "至少两个恢复维度同时提示异常，今天取消强度训练。" : "出现明显恢复警报，今天取消训练课。")
-                : available < 4 ? "恢复依据不完整，暂不放行强度训练；补齐数据后重新评估。"
-                : light == YELLOW ? "有一个恢复维度需要留意，缩短时长并降低强度。"
-                : "四项恢复依据均可用且未触发减量规则，今天以稳定有氧为主。";
+        String summary;
+        if (light == RED) {
+            summary = warnings >= 2 ? "至少两个恢复维度同时提示异常，今天取消强度训练。" : "出现明显恢复警报，今天取消训练课。";
+        } else if (light == YELLOW) {
+            summary = available < MIN_SIGNALS_FOR_GREEN
+                    ? "可用恢复依据不足三项，暂不放行强度训练；补齐数据后重新评估。"
+                    : "有一个恢复维度需要留意，缩短时长并降低强度。";
+        } else {
+            summary = available < 4
+                    ? "四项恢复依据中缺一项但均未触发减量规则；保留有氧训练，时长与强度按证据完整度收紧。"
+                    : "四项恢复依据均可用且未触发减量规则，今天以稳定有氧为主。";
+        }
         List<String> actions = new ArrayList<>();
         if (!factors.get(0).available() || !factors.get(1).available() || !factors.get(2).available()) {
             actions.add("同步 Garmin 的训练状态、当日 HRV 和昨夜睡眠后刷新建议。");
@@ -60,6 +73,9 @@ public class TrainingAdviceEngine {
         if (!factors.get(3).available()) actions.add("补填当天的主观疲劳（RPE）打卡：1 很轻松，10 极度疲劳。");
         if (!factors.get(4).available()) actions.add("FTP 缺失、无效或超过 90 天，暂按体感训练，确认当前 FTP 后再使用瓦数。");
         if (!factors.get(5).available()) actions.add("补填近 14 天体重以计算 W/kg；体重不参与恢复灯色判断。");
+        if (light == GREEN && available < 4) {
+            actions.add("补齐缺失的那一项恢复依据后重新评估，可放宽到完整的有氧时长。");
+        }
         Integer watts = factors.get(4).available() ? ftp.getFtpWatts() : null;
         Double wattsPerKg = watts != null && factors.get(5).available()
                 ? Math.round(watts / weight.getWeightKg().doubleValue() * 100.0) / 100.0 : null;
@@ -198,9 +214,19 @@ public class TrainingAdviceEngine {
                     "若热身仍明显疲劳，直接结束并休息；缺数据时先补齐再决定是否骑行。");
         }
         boolean lowAerobic = training != null && "AEROBIC_LOW_SHORTAGE".equals(training.getBalanceFeedbackPhrase());
-        int mainMinutes = lowAerobic ? 45 : 30;
-        return new Prescription("ENDURANCE", lowAerobic ? "60 分钟基础有氧" : "45 分钟稳定有氧", mainMinutes + 15,
-                "主段 Z2 · 60–70% FTP", lowAerobic ? "恢复信号允许，优先补足低强度有氧。" : "维持有氧基础；绿灯不自动追加间歇课。",
+        boolean fullEvidence = available >= 4;
+        // 只有四项齐全时才给到 60 分钟；缺一项时收到 45 分钟，但**仍然保留 Z2**——
+        // 低强度有氧不足时最该练的就是 Z2，为了保守而退回恢复骑是本末倒置。
+        boolean extended = lowAerobic && fullEvidence;
+        int mainMinutes = extended ? 45 : 30;
+        String title = extended ? "60 分钟基础有氧"
+                : fullEvidence ? "45 分钟稳定有氧"
+                : "45 分钟有氧（恢复依据不全，已收紧）";
+        String purpose = extended ? "恢复信号允许，优先补足低强度有氧。"
+                : fullEvidence ? "维持有氧基础；绿灯不自动追加间歇课。"
+                : "缺一项恢复依据但未触发减量规则；保留 Z2 有氧，时长按证据完整度收紧。";
+        return new Prescription("ENDURANCE", title, mainMinutes + 15,
+                "主段 Z2 · 60–70% FTP", purpose,
                 List.of(step("热身", 10, 45, 55, ftp, "逐渐进入节奏"),
                         step("稳定有氧", mainMinutes, 60, 70, ftp, "体感用力约 2–3/10，能完整交谈"),
                         step("放松", 5, 40, 50, ftp, "轻松踩踏")),

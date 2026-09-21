@@ -42,8 +42,13 @@ public class TrainingPlanContextBuilder {
         payload.put("recoverySignalsAvailable", advice.availableRecoverySignals());
         payload.set("evidence", json.valueToTree(advice.factors()));
         boolean rest = advice.light() == TrainingAdviceDto.Light.RED || advice.availableRecoverySignals() == 0;
-        int maxMinutes = rest ? 0 : advice.light() == TrainingAdviceDto.Light.YELLOW ? 20 : 90;
-        int maxPercent = rest ? 0 : advice.light() == TrainingAdviceDto.Light.YELLOW ? 50 : 75;
+        // 证据不全时上限收紧，与规则引擎的处方保持一致：缺一项给 45 分钟 / 70%，
+        // 四项齐全才给 90 分钟 / 75%。AI 只能在这个上限内安排。
+        boolean fullEvidence = advice.availableRecoverySignals() >= 4;
+        int maxMinutes = rest ? 0 : advice.light() == TrainingAdviceDto.Light.YELLOW ? 20
+                : fullEvidence ? 90 : 45;
+        int maxPercent = rest ? 0 : advice.light() == TrainingAdviceDto.Light.YELLOW ? 50
+                : fullEvidence ? 75 : 70;
         payload.putObject("constraints").put("maxDurationMinutes", maxMinutes)
                 .put("maxFtpPercent", maxPercent).put("noIntervals", true)
                 .put("scope", "只生成当天计划；未来日期不能预判绿灯；缺数据时保守安排");

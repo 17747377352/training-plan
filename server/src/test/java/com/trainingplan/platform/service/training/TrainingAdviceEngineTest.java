@@ -110,7 +110,49 @@ class TrainingAdviceEngineTest {
         training.setCalendarDate(DAY.minusDays(1));
         assertThat(evaluate().light()).isEqualTo(GREEN);
         checkin.setCalendarDate(DAY.minusDays(1));
-        assertThat(evaluate().light()).isEqualTo(YELLOW);
+        var result = evaluate();
+        // 昨天的 RPE 不算今天的依据（因子不可用），但 v2 下缺这一项不再压灯，
+        // 而是收紧处方：三项可用、无异常 → 绿灯 + 45 分钟。
+        assertThat(result.factors().get(3).available()).isFalse();
+        assertThat(result.availableRecoverySignals()).isEqualTo(3);
+        assertThat(result.light()).isEqualTo(GREEN);
+        assertThat(result.prescription().durationMinutes()).isEqualTo(45);
+    }
+
+    @Test
+    void missingOneSignalStillAllowsGreenButTightensPrescription() {
+        // readiness-v2 的核心：缺一项不压灯；四项齐全才给到 60 分钟基础有氧
+        training.setBalanceFeedbackPhrase("AEROBIC_LOW_SHORTAGE");
+        checkin.setRpe(null);
+        var result = evaluate();
+        assertThat(result.light()).isEqualTo(GREEN);
+        assertThat(result.availableRecoverySignals()).isEqualTo(3);
+        assertThat(result.prescription().title()).contains("已收紧");
+        assertThat(result.prescription().durationMinutes()).isEqualTo(45);
+        assertThat(result.prescription().steps()).extracting(st -> st.minutes()).containsExactly(10, 30, 5);
+        // 仍然保留 Z2：低强度有氧不足时最该练的就是它
+        assertThat(result.prescription().steps().get(1).ftpPercentMin()).isEqualTo(60);
+        assertThat(result.actions()).anyMatch(a -> a.contains("放宽"));
+
+        // 证据齐全时同样条件下给到 60 分钟
+        checkin.setRpe(3);
+        var full = evaluate();
+        assertThat(full.availableRecoverySignals()).isEqualTo(4);
+        assertThat(full.prescription().durationMinutes()).isEqualTo(60);
+        assertThat(full.prescription().steps()).extracting(st -> st.minutes()).containsExactly(10, 45, 5);
+    }
+
+    @Test
+    void fewerThanThreeSignalsStillBlocksGreen() {
+        // 边界：可用依据掉到 2 项就回到黄灯并只给恢复骑
+        checkin.setRpe(null);
+        hrv.setBaselineBalancedLow(null);
+        hrv.setHrvStatus("UNKNOWN");
+        var result = evaluate();
+        assertThat(result.availableRecoverySignals()).isEqualTo(2);
+        assertThat(result.light()).isEqualTo(YELLOW);
+        assertThat(result.prescription().type()).isEqualTo("RECOVERY");
+        assertThat(result.summary()).contains("不足三项");
     }
 
     @Test
@@ -131,8 +173,12 @@ class TrainingAdviceEngineTest {
     void hrvNeedsBaselineOrRecognizedPersonalStatus() {
         hrv.setBaselineBalancedLow(null);
         hrv.setHrvStatus("UNKNOWN");
-        assertThat(evaluate().factors().get(1).available()).isFalse();
-        assertThat(evaluate().light()).isEqualTo(YELLOW);
+        var result = evaluate();
+        assertThat(result.factors().get(1).available()).isFalse();
+        // 没有基线就没有判据，因子如实标记不可用；v2 下缺一项不压灯但收紧处方
+        assertThat(result.availableRecoverySignals()).isEqualTo(3);
+        assertThat(result.light()).isEqualTo(GREEN);
+        assertThat(result.prescription().durationMinutes()).isEqualTo(45);
     }
 
     @Test
@@ -176,8 +222,14 @@ class TrainingAdviceEngineTest {
         training.setTrainingStatusPhrase("NO_STATUS_1");
         training.setAcwrStatus(null);
         training.setAcwrRatio(null);
-        assertThat(evaluate().factors().get(0).available()).isFalse();
-        assertThat(evaluate().light()).isEqualTo(YELLOW);
+        var result = evaluate();
+        // 空快照被标记为不可用而不是当成正常绿因子
+        assertThat(result.factors().get(0).available()).isFalse();
+        assertThat(result.factors().get(0).light()).isEqualTo(UNKNOWN);
+        // 但它终究只占一项：v2 下其余三项正常时仍放行绿灯，处方收紧
+        assertThat(result.availableRecoverySignals()).isEqualTo(3);
+        assertThat(result.light()).isEqualTo(GREEN);
+        assertThat(result.prescription().durationMinutes()).isEqualTo(45);
     }
 
     @Test
