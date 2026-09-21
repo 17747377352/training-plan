@@ -15,6 +15,7 @@ interface DetailSection {
   title: string;
   description: string;
   fields: DetailField[];
+  priority?: boolean;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -33,18 +34,9 @@ const loading = ref(false);
 const loadFailed = ref(false);
 const activity = ref<ActivityDetail | null>(null);
 
-const activityTitle = computed(
-  () =>
-    activity.value?.activityName?.trim() ||
-    activityTypeLabel(activity.value?.activityTypeKey) ||
-    "活动详情",
-);
-
 const headingDescription = computed(() => {
   if (!activity.value) return "查看活动的完整采集字段。";
-  const time = formatDateTime(
-    activity.value.startTimeLocal ?? activity.value.startTimeGmt,
-  );
+  const time = formatDateTime(activity.value.startTimeLocal);
   return `${time} · ${activityTypeLabel(activity.value.activityTypeKey)}`;
 });
 
@@ -133,37 +125,8 @@ const detailSections = computed<DetailSection[]>(() => {
 
   return [
     {
-      title: "基础信息",
-      description: "平台、Garmin 与活动类型标识。",
-      fields: [
-        field("id", "记录 ID", formatId(value.id)),
-        field(
-          "garminAccountId",
-          "Garmin 账号 ID",
-          formatId(value.garminAccountId),
-        ),
-        field(
-          "garminActivityId",
-          "Garmin 活动 ID",
-          formatId(value.garminActivityId),
-        ),
-        field(
-          "activityTypeKey",
-          "活动类型标识",
-          formatText(value.activityTypeKey),
-        ),
-        field(
-          "activityTypeId",
-          "活动类型 ID",
-          formatNumber(value.activityTypeId),
-        ),
-        field("parentTypeId", "父类型 ID", formatNumber(value.parentTypeId)),
-        field("activityName", "活动名称", formatText(value.activityName)),
-      ],
-    },
-    {
       title: "时间",
-      description: "开始时间与三种时长口径。",
+      description: "本地开始时间与三种时长口径。",
       fields: [
         field(
           "startTimeLocal",
@@ -171,24 +134,19 @@ const detailSections = computed<DetailSection[]>(() => {
           formatDateTime(value.startTimeLocal),
         ),
         field(
-          "startTimeGmt",
-          "GMT 开始时间",
-          formatDateTime(value.startTimeGmt),
-        ),
-        field(
           "durationSeconds",
           "计时时长",
-          formatDurationWithSeconds(value.durationSeconds),
+          formatDuration(value.durationSeconds),
         ),
         field(
           "movingDurationSeconds",
           "移动时长",
-          formatDurationWithSeconds(value.movingDurationSeconds),
+          formatDuration(value.movingDurationSeconds),
         ),
         field(
           "elapsedDurationSeconds",
           "总耗时",
-          formatDurationWithSeconds(value.elapsedDurationSeconds),
+          formatDuration(value.elapsedDurationSeconds),
         ),
       ],
     },
@@ -268,6 +226,7 @@ const detailSections = computed<DetailSection[]>(() => {
     {
       title: "功率与骑行效率",
       description: "功率输出、强度、踏频与左右平衡。",
+      priority: true,
       fields: [
         field("avgPower", "平均功率 AP", formatNumber(value.avgPower, " W", 0)),
         field("maxPower", "最大功率", formatNumber(value.maxPower, " W", 0)),
@@ -347,6 +306,14 @@ const detailSections = computed<DetailSection[]>(() => {
   ];
 });
 
+const prioritySections = computed(() =>
+  detailSections.value.filter((section) => section.priority),
+);
+
+const regularSections = computed(() =>
+  detailSections.value.filter((section) => !section.priority),
+);
+
 function activityTypeLabel(typeKey?: string | null): string {
   if (!typeKey) return "骑行";
   return (
@@ -377,14 +344,9 @@ function formatDuration(seconds?: number | null): string {
   const rounded = Math.max(0, Math.round(seconds));
   const hours = Math.floor(rounded / 3600);
   const minutes = Math.floor((rounded % 3600) / 60);
-  const remainingSeconds = rounded % 60;
-  if (hours > 0) return `${hours}小时${minutes}分${remainingSeconds}秒`;
-  return `${minutes}分${remainingSeconds}秒`;
-}
-
-function formatDurationWithSeconds(seconds?: number | null): string {
-  if (seconds == null || !Number.isFinite(seconds)) return "--";
-  return `${formatDuration(seconds)} · ${Math.round(seconds)} 秒`;
+  if (hours > 0) return `${hours}小时${minutes}分`;
+  if (minutes > 0) return `${minutes}分钟`;
+  return "<1分钟";
 }
 
 function formatDistance(meters?: number | null): string {
@@ -447,7 +409,7 @@ watch(() => route.params.id, loadActivity, { immediate: true });
   <section class="page-container activity-detail-page">
     <PageHeading
       eyebrow="活动详情"
-      :title="activityTitle"
+      title="活动详情"
       :description="headingDescription"
     >
       <template #actions>
@@ -471,7 +433,10 @@ watch(() => route.params.id, loadActivity, { immediate: true });
           <div class="detail-hero-heading">
             <div>
               <span>关键摘要</span>
-              <h2>{{ activityTypeLabel(activity.activityTypeKey) }}</h2>
+              <h2>
+                {{ activity.activityName?.trim() || "未命名活动" }}
+              </h2>
+              <p>{{ activityTypeLabel(activity.activityTypeKey) }}</p>
             </div>
             <el-tag
               v-if="activity.trainingEffectLabel"
@@ -492,6 +457,34 @@ watch(() => route.params.id, loadActivity, { immediate: true });
             </div>
           </div>
         </section>
+
+        <div class="priority-detail-sections">
+          <section
+            v-for="section in prioritySections"
+            :key="section.title"
+            class="activity-detail-card"
+          >
+            <header class="detail-card-heading">
+              <div>
+                <h2>{{ section.title }}</h2>
+                <p>{{ section.description }}</p>
+              </div>
+            </header>
+            <dl class="detail-field-grid">
+              <div
+                v-for="field in section.fields"
+                :key="field.key"
+                class="detail-field"
+              >
+                <dt>
+                  <span>{{ field.label }}</span>
+                  <code>{{ field.key }}</code>
+                </dt>
+                <dd>{{ field.value }}</dd>
+              </div>
+            </dl>
+          </section>
+        </div>
 
         <section class="activity-detail-card power-zone-card">
           <header class="detail-card-heading">
@@ -523,7 +516,7 @@ watch(() => route.params.id, loadActivity, { immediate: true });
 
         <div class="activity-detail-sections">
           <section
-            v-for="section in detailSections"
+            v-for="section in regularSections"
             :key="section.title"
             class="activity-detail-card"
           >

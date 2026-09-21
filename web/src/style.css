@@ -858,6 +858,12 @@ body {
   font-size: 18px;
 }
 
+.detail-hero-heading p {
+  margin: 6px 0 0;
+  color: #7d8999;
+  font-size: 12px;
+}
+
 .detail-summary-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -894,6 +900,10 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   margin-top: 16px;
+}
+
+.priority-detail-sections {
+  margin-bottom: 16px;
 }
 
 .activity-detail-card {
