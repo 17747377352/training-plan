@@ -147,3 +147,47 @@ export interface ActivityDetail {
   createTime?: string | null;
   updateTime?: string | null;
 }
+
+export interface TrendQuery {
+  startDate: string;
+  endDate: string;
+}
+
+export interface DailyHealthTrend {
+  calendarDate: string;
+  steps?: number | null;
+  distanceMeters?: number | null;
+  totalKilocalories?: number | null;
+  activeKilocalories?: number | null;
+  restingHeartRate?: number | null;
+  minHeartRate?: number | null;
+  maxHeartRate?: number | null;
+  averageStressLevel?: number | null;
+  bodyBatteryHighest?: number | null;
+  bodyBatteryLowest?: number | null;
+}
+
+export interface HrvTrend {
+  calendarDate: string;
+  lastNightAvg?: number | null;
+  weeklyAvg?: number | null;
+  hrvStatus?: string | null;
+  baselineLowUpper?: number | null;
+  baselineBalancedLow?: number | null;
+  baselineBalancedUpper?: number | null;
+}
+
+export interface SleepTrend {
+  calendarDate: string;
+  sleepStartGmt?: string | null;
+  sleepEndGmt?: string | null;
+  sleepTimeSeconds?: number | null;
+  deepSleepSeconds?: number | null;
+  lightSleepSeconds?: number | null;
+  remSleepSeconds?: number | null;
+  awakeSleepSeconds?: number | null;
+  sleepScore?: number | null;
+  avgSleepHrv?: number | null;
+  avgSpo2?: number | null;
+  avgRespiration?: number | null;
+}

@@ -25,6 +25,7 @@ export default defineConfig({
             return "vue-vendor";
           }
           if (id.includes("axios")) return "http-client";
+          if (id.includes("/zrender/")) return "chart-renderer";
           if (id.includes("echarts")) return "charts";
         },
       },
