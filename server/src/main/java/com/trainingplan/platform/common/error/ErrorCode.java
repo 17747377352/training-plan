@@ -34,6 +34,7 @@ public enum ErrorCode {
     GARMIN_INVALID_CREDENTIALS(46007, "Garmin账号或密码错误"),
     GARMIN_CONNECT_FAILED(46008, "连接Garmin账号失败"),
     GARMIN_CONNECT_TIMEOUT(46009, "Garmin登录耗时过长已超时，请稍后重试"),
+    SYNC_JOB_TIMEOUT(46010, "同步任务超时未完成"),
     AI_SERVICE_ERROR(47001, "AI服务调用失败"),
     AI_TIMEOUT(47002, "AI服务响应超时"),
     SYSTEM_ERROR(50000, "系统暂时不可用");

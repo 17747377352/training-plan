@@ -65,4 +65,14 @@ public interface SyncService {
      * @param errorCode 脱敏错误编码
      */
     void fail(Long jobId, String errorCode);
+
+    /**
+     * 收敛僵死任务：长时间停留在 PENDING 或 RUNNING 的任务置为失败。
+     *
+     * <p>采集器未运行、进程被杀或与平台断连时，任务不会有人推进；
+     * 不清理会让任务表长期残留假"进行中"记录。</p>
+     *
+     * @return 本次收敛的任务数
+     */
+    int failStaleJobs();
 }

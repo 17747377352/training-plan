@@ -1,6 +1,8 @@
 package com.trainingplan.platform.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trainingplan.platform.common.error.ErrorCode;
@@ -28,6 +30,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
@@ -65,6 +68,14 @@ public class SyncServiceImpl implements SyncService {
 
     @Value("${app.sync.task-queue:training-plan:sync:jobs}")
     private String taskQueue;
+
+    /** 从未被采集器取走的任务，超过该时长即判定僵死。 */
+    @Value("${app.sync.pending-timeout:10m}")
+    private Duration pendingTimeout;
+
+    /** 已被取走但长期未完成的任务（采集器进程可能已消失）。 */
+    @Value("${app.sync.running-timeout:30m}")
+    private Duration runningTimeout;
 
     @Override
     public Long triggerSync(Long userId, Long accountId, Integer days) {
@@ -158,6 +169,36 @@ public class SyncServiceImpl implements SyncService {
     public void fail(Long jobId, String errorCode) {
         syncJobMapper.updateById(failUpdate(jobId, errorCode));
         log.info("同步任务失败 jobId={} errorCode={}", jobId, errorCode);
+    }
+
+    @Override
+    public int failStaleJobs() {
+        LocalDateTime now = LocalDateTime.now();
+        int affected = 0;
+        affected += failStale(STATUS_PENDING, SyncJob::getCreateTime,
+                now.minus(pendingTimeout));
+        affected += failStale(STATUS_RUNNING, SyncJob::getStartedTime,
+                now.minus(runningTimeout));
+        return affected;
+    }
+
+    /**
+     * 收敛某一状态下超时未推进的任务。
+     *
+     * @param status  任务状态
+     * @param column  用于判定超时的时间列
+     * @param before  早于该时间视为僵死
+     * @return 影响行数
+     */
+    private int failStale(String status, SFunction<SyncJob, ?> column, LocalDateTime before) {
+        SyncJob update = new SyncJob();
+        update.setJobStatus(STATUS_FAILED);
+        update.setFinishedTime(LocalDateTime.now());
+        update.setErrorCode(ErrorCode.SYNC_JOB_TIMEOUT.name());
+        LambdaQueryWrapper<SyncJob> wrapper = Wrappers.<SyncJob>lambdaQuery()
+                .eq(SyncJob::getJobStatus, status)
+                .lt(column, before);
+        return syncJobMapper.update(update, wrapper);
     }
 
     private SyncJob failUpdate(Long jobId, String errorCode) {

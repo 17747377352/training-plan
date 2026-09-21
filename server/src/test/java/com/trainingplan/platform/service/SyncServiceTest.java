@@ -30,6 +30,7 @@ import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -38,6 +39,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -208,6 +210,34 @@ class SyncServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting("errorCode")
                 .isEqualTo(ErrorCode.NOT_FOUND);
+    }
+
+    @Test
+    void shouldFailStalePendingAndRunningJobs() {
+        ReflectionTestUtils.setField(syncService, "pendingTimeout", Duration.ofMinutes(10));
+        ReflectionTestUtils.setField(syncService, "runningTimeout", Duration.ofMinutes(60));
+        // 第一次收敛 PENDING，第二次收敛 RUNNING
+        when(syncJobMapper.update(any(SyncJob.class), any())).thenReturn(1, 2);
+
+        int affected = syncService.failStaleJobs();
+
+        assertThat(affected).isEqualTo(3);
+        ArgumentCaptor<SyncJob> captor = ArgumentCaptor.forClass(SyncJob.class);
+        verify(syncJobMapper, times(2)).update(captor.capture(), any());
+        assertThat(captor.getAllValues()).allSatisfy(job -> {
+            assertThat(job.getJobStatus()).isEqualTo("FAILED");
+            assertThat(job.getErrorCode()).isEqualTo("SYNC_JOB_TIMEOUT");
+            assertThat(job.getFinishedTime()).isNotNull();
+        });
+    }
+
+    @Test
+    void shouldReportZeroWhenNothingIsStale() {
+        ReflectionTestUtils.setField(syncService, "pendingTimeout", Duration.ofMinutes(10));
+        ReflectionTestUtils.setField(syncService, "runningTimeout", Duration.ofMinutes(60));
+        when(syncJobMapper.update(any(SyncJob.class), any())).thenReturn(0);
+
+        assertThat(syncService.failStaleJobs()).isZero();
     }
 
     private GarminAccount boundAccount() {

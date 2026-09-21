@@ -36,6 +36,12 @@ app:
   sync:
     # 同步任务队列，需与 collector 的 COLLECTOR_TASK_QUEUE 一致
     task-queue: ${SYNC_TASK_QUEUE:training-plan:sync:jobs}
+    # 僵死任务收敛：采集器未运行或进程消失时，任务不会有人推进
+    pending-timeout: 10m
+    # 大范围历史回填（如 365 天）会逐日拉取，留足余量避免误判执行中的任务
+    running-timeout: 60m
+    cleanup-interval: 5m
+    cleanup-initial-delay: 1m
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173}
   security:

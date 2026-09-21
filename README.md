@@ -120,6 +120,8 @@ Garmin 会对登录端点做 IP 级限流。一旦登录被限流或遇到 Cloud
 
 同步目前**只能手动触发**，尚未接入定时调度。
 
+长时间无人推进的任务会被定时清理器收敛：停留在 `PENDING` 超过 `app.sync.pending-timeout`（默认 10 分钟）、或 `RUNNING` 超过 `app.sync.running-timeout`（默认 60 分钟）的任务会被置为 `FAILED` 并标记 `SYNC_JOB_TIMEOUT`。采集器进程消失或与平台断连时不会留下永久的假「进行中」记录。
+
 ## 验证认证链路
 
 后端以 dev profile 运行且本地 MySQL、Redis 可用时，可执行端到端断言脚本：
