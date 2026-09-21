@@ -12,10 +12,13 @@ import com.trainingplan.platform.dto.sync.SyncJobQuery;
 import com.trainingplan.platform.dto.sync.SyncOverviewDto;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.entity.SyncJob;
+import com.trainingplan.platform.mapper.ActivityHrZoneMapper;
 import com.trainingplan.platform.mapper.ActivityMapper;
 import com.trainingplan.platform.mapper.DailyHealthMapper;
+import com.trainingplan.platform.mapper.FtpHistoryMapper;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.mapper.HrvRecordMapper;
+import com.trainingplan.platform.mapper.TrainingStatusMapper;
 import com.trainingplan.platform.mapper.SleepRecordMapper;
 import com.trainingplan.platform.mapper.SyncJobMapper;
 import com.trainingplan.platform.security.TokenCipher;
@@ -75,6 +78,12 @@ class SyncJobDashboardTest {
     @Mock
     private HrvRecordMapper hrvRecordMapper;
     @Mock
+    private TrainingStatusMapper trainingStatusMapper;
+    @Mock
+    private FtpHistoryMapper ftpHistoryMapper;
+    @Mock
+    private ActivityHrZoneMapper activityHrZoneMapper;
+    @Mock
     private TokenCipher tokenCipher;
     @Mock
     private StringRedisTemplate redisTemplate;
@@ -92,7 +101,8 @@ class SyncJobDashboardTest {
         TableInfoHelper.initTableInfo(assistant, SyncJob.class);
         TableInfoHelper.initTableInfo(assistant, GarminAccount.class);
         syncService = new SyncServiceImpl(syncJobMapper, accountMapper, activityMapper,
-                dailyHealthMapper, sleepRecordMapper, hrvRecordMapper, tokenCipher, redisTemplate,
+                dailyHealthMapper, sleepRecordMapper, hrvRecordMapper, trainingStatusMapper,
+                ftpHistoryMapper, activityHrZoneMapper, tokenCipher, redisTemplate,
                 new ObjectMapper(), userService);
         ReflectionTestUtils.setField(syncService, "taskQueue", "training-plan:sync:jobs");
         ReflectionTestUtils.setField(syncService, "pendingTimeout", java.time.Duration.ofMinutes(10));

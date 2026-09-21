@@ -201,13 +201,21 @@ class SyncWorker:
         start_date: str | None,
         end_date: str | None,
         region: str,
-    ) -> dict[str, list[dict[str, Any]]]:
-        """按日期逐日拉取，逐类数据独立容错，缺一天不影响其他天。"""
+    ) -> dict[str, Any]:
+        """按日期区间拉取，逐类数据独立容错，缺一天不影响其他天。
+
+        取值方式分两类：
+          * 睡眠、每日统计、训练状态只有逐日接口，必须循环（实测
+            ``get_sleep_daily`` 返回的是 ``{calendarDate, values}`` 指标序列，
+            没有 ``dailySleepDTO``，用它替换会静默丢掉分期/评分/血氧/睡眠 HRV）。
+          * HRV、骑行列表、FTP 有区间接口，一次请求取整段。
+        """
 
         days = self._date_range(start_date, end_date)
+        start, end = days[0], days[-1]
         daily: list[dict[str, Any]] = []
         sleep: list[dict[str, Any]] = []
-        hrv: list[dict[str, Any]] = []
+        training: list[dict[str, Any]] = []
         activities: dict[Any, dict[str, Any]] = {}
 
         for day in days:
@@ -221,24 +229,133 @@ class SyncWorker:
                 if row is not None:
                     sleep.append(row)
 
-            raw_hrv = self._safe(lambda d=day: adapter.client.get_hrv_data(d))
-            if raw_hrv:
-                row = self._hrv_row(raw_hrv, day)
+            # 逐日查询返回的是那一天的快照（实测急性负荷随日期变化），可以按日回补
+            raw_status = self._safe(lambda d=day: adapter.client.get_training_status(d))
+            if raw_status:
+                row = self._training_status_row(raw_status, day)
                 if row is not None:
-                    hrv.append(row)
+                    training.append(row)
 
-        start, end = days[0], days[-1]
+        hrv: list[dict[str, Any]] = []
+        raw_hrv_range = self._safe(lambda: adapter.client.get_hrv_data_range(start, end))
+        for summary in (raw_hrv_range or {}).get("hrvSummaries") or []:
+            row = self._hrv_row({"hrvSummary": summary}, summary.get("calendarDate") or start)
+            if row is not None:
+                hrv.append(row)
+
         for activity in self._safe(lambda: adapter.client.get_activities_by_date(
                 start, end, ACTIVITY_TYPE_CYCLING, "asc")) or []:
             row = self._activity_row(activity)
             if row is not None:
                 activities[row["garminActivityId"]] = row
 
+        hr_zones: dict[str, list[dict[str, Any]]] = {}
+        for activity_id in activities:
+            zones = self._safe(
+                lambda aid=activity_id: adapter.client.get_activity_hr_in_timezones(aid)
+            )
+            rows = self._hr_zone_rows(zones)
+            if rows:
+                hr_zones[str(activity_id)] = rows
+
         return {
             "dailyHealth": daily,
             "sleep": sleep,
             "hrv": hrv,
             "activities": list(activities.values()),
+            "trainingStatus": training,
+            "ftpHistory": self._ftp_rows(adapter),
+            "activityHrZones": hr_zones,
+        }
+
+    @staticmethod
+    def _ftp_rows(adapter: GarminReadAdapter) -> list[dict[str, Any]]:
+        """取骑行 FTP 历史；没有历史接口时退回当前值。"""
+
+        history = SyncWorker._safe(
+            lambda: adapter.client.get_functional_threshold_power_range(
+                "2000-01-01", date.today().isoformat(), sport="CYCLING"
+            )
+        )
+        rows: dict[str, dict[str, Any]] = {}
+        for item in history or []:
+            effective = (item.get("from") or "")[:10]
+            value = item.get("value")
+            if effective and value:
+                rows[effective] = {"effectiveDate": effective, "ftpWatts": round(float(value))}
+
+        if not rows:
+            current = SyncWorker._safe(lambda: adapter.client.get_cycling_ftp()) or {}
+            value = current.get("functionalThresholdPower")
+            effective = (current.get("calendarDate") or "")[:10]
+            if value and effective:
+                rows[effective] = {"effectiveDate": effective, "ftpWatts": round(float(value))}
+        return sorted(rows.values(), key=lambda r: r["effectiveDate"])
+
+    @staticmethod
+    def _hr_zone_rows(zones: Any) -> list[dict[str, Any]]:
+        """把活动心率区间转换为平台字段。"""
+
+        rows: list[dict[str, Any]] = []
+        for zone in zones or []:
+            number = zone.get("zoneNumber")
+            if number is None:
+                continue
+            rows.append({
+                "zoneNumber": number,
+                "zoneLowBoundary": zone.get("zoneLowBoundary"),
+                "secondsInZone": int(zone.get("secsInZone") or 0),
+            })
+        return sorted(rows, key=lambda r: r["zoneNumber"])
+
+    @staticmethod
+    def _training_status_row(raw: dict[str, Any], day: str) -> dict[str, Any] | None:
+        """把训练状态响应转换为平台字段。
+
+        响应按设备 ID 分组：训练状态取标了 primaryTrainingDevice 的那台，
+        负荷平衡按同一台设备取，取不到再退回第一台。
+        """
+
+        by_device = (
+            (raw.get("mostRecentTrainingStatus") or {}).get("latestTrainingStatusData") or {}
+        )
+        if not by_device:
+            return None
+        entries = list(by_device.values())
+        entry = next((e for e in entries if e.get("primaryTrainingDevice")), None) or entries[0]
+        device_id = str(entry.get("deviceId"))
+
+        balance_map = (
+            (raw.get("mostRecentTrainingLoadBalance") or {}).get("metricsTrainingLoadBalanceDTOMap")
+            or {}
+        )
+        balance = balance_map.get(device_id) or next(iter(balance_map.values()), {})
+        acute = entry.get("acuteTrainingLoadDTO") or {}
+        vo2max = (raw.get("mostRecentVO2Max") or {}).get("generic") or {}
+
+        return {
+            "calendarDate": entry.get("calendarDate") or day,
+            "trainingStatus": entry.get("trainingStatus"),
+            "trainingStatusPhrase": entry.get("trainingStatusFeedbackPhrase"),
+            "acwrPercent": acute.get("acwrPercent"),
+            "acwrStatus": acute.get("acwrStatus"),
+            "acwrRatio": acute.get("dailyAcuteChronicWorkloadRatio"),
+            "acuteLoad": acute.get("dailyTrainingLoadAcute"),
+            "chronicLoad": acute.get("dailyTrainingLoadChronic"),
+            "chronicLoadMin": acute.get("minTrainingLoadChronic"),
+            "chronicLoadMax": acute.get("maxTrainingLoadChronic"),
+            "loadAerobicLow": balance.get("monthlyLoadAerobicLow"),
+            "loadAerobicLowTargetMin": balance.get("monthlyLoadAerobicLowTargetMin"),
+            "loadAerobicLowTargetMax": balance.get("monthlyLoadAerobicLowTargetMax"),
+            "loadAerobicHigh": balance.get("monthlyLoadAerobicHigh"),
+            "loadAerobicHighTargetMin": balance.get("monthlyLoadAerobicHighTargetMin"),
+            "loadAerobicHighTargetMax": balance.get("monthlyLoadAerobicHighTargetMax"),
+            "loadAnaerobic": balance.get("monthlyLoadAnaerobic"),
+            "loadAnaerobicTargetMin": balance.get("monthlyLoadAnaerobicTargetMin"),
+            "loadAnaerobicTargetMax": balance.get("monthlyLoadAnaerobicTargetMax"),
+            "balanceFeedbackPhrase": balance.get("trainingBalanceFeedbackPhrase"),
+            "vo2maxValue": vo2max.get("vo2MaxValue"),
+            "fitnessAge": vo2max.get("fitnessAge"),
         }
 
     @staticmethod

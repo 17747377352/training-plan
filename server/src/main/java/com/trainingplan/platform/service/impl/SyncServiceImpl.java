@@ -11,8 +11,10 @@ import com.trainingplan.platform.common.api.PageResult;
 import com.trainingplan.platform.common.error.ErrorCode;
 import com.trainingplan.platform.common.exception.BusinessException;
 import com.trainingplan.platform.dto.sync.AccountSyncStateDto;
+import com.trainingplan.platform.dto.sync.ActivityHrZoneDto;
 import com.trainingplan.platform.dto.sync.ActivityDto;
 import com.trainingplan.platform.dto.sync.DailyHealthDto;
+import com.trainingplan.platform.dto.sync.FtpHistoryDto;
 import com.trainingplan.platform.dto.sync.HrvRecordDto;
 import com.trainingplan.platform.dto.sync.SleepRecordDto;
 import com.trainingplan.platform.dto.sync.SyncIngestRequest;
@@ -20,18 +22,25 @@ import com.trainingplan.platform.dto.sync.SyncJobDto;
 import com.trainingplan.platform.dto.sync.SyncJobQuery;
 import com.trainingplan.platform.dto.sync.SyncOverviewDto;
 import com.trainingplan.platform.dto.sync.SyncTaskPayload;
+import com.trainingplan.platform.dto.sync.TrainingStatusDto;
 import com.trainingplan.platform.entity.Activity;
+import com.trainingplan.platform.entity.ActivityHrZone;
 import com.trainingplan.platform.entity.DailyHealth;
+import com.trainingplan.platform.entity.FtpHistory;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.entity.HrvRecord;
 import com.trainingplan.platform.entity.SleepRecord;
 import com.trainingplan.platform.entity.SyncJob;
+import com.trainingplan.platform.entity.TrainingStatus;
+import com.trainingplan.platform.mapper.ActivityHrZoneMapper;
 import com.trainingplan.platform.mapper.ActivityMapper;
 import com.trainingplan.platform.mapper.DailyHealthMapper;
+import com.trainingplan.platform.mapper.FtpHistoryMapper;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.mapper.HrvRecordMapper;
 import com.trainingplan.platform.mapper.SleepRecordMapper;
 import com.trainingplan.platform.mapper.SyncJobMapper;
+import com.trainingplan.platform.mapper.TrainingStatusMapper;
 import com.trainingplan.platform.security.TokenCipher;
 import com.trainingplan.platform.service.SyncService;
 import com.trainingplan.platform.service.UserService;
@@ -40,6 +49,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.Duration;
@@ -74,6 +84,9 @@ public class SyncServiceImpl implements SyncService {
     private static final String STATUS_FAILED = "FAILED";
     private static final int MAX_DAYS = 365;
 
+    /** FTP 来源：Garmin 自动测算。 */
+    private static final String SOURCE_GARMIN = "GARMIN";
+
     /** 看板统计「最近 N 天失败数」的窗口。 */
     private static final int FAILURE_WINDOW_DAYS = 7;
 
@@ -86,6 +99,9 @@ public class SyncServiceImpl implements SyncService {
     private final DailyHealthMapper dailyHealthMapper;
     private final SleepRecordMapper sleepRecordMapper;
     private final HrvRecordMapper hrvRecordMapper;
+    private final TrainingStatusMapper trainingStatusMapper;
+    private final FtpHistoryMapper ftpHistoryMapper;
+    private final ActivityHrZoneMapper activityHrZoneMapper;
     private final TokenCipher tokenCipher;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
@@ -240,6 +256,7 @@ public class SyncServiceImpl implements SyncService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void ingest(Long jobId, SyncIngestRequest request) {
         SyncJob job = requireJob(jobId);
         Long accountId = job.getGarminAccountId();
@@ -247,8 +264,13 @@ public class SyncServiceImpl implements SyncService {
         int sleep = upsertSleep(accountId, request.sleep());
         int hrv = upsertHrv(accountId, request.hrv());
         int activities = upsertActivities(accountId, request.activities());
-        log.info("同步数据已入库 jobId={} daily={} sleep={} hrv={} activity={}",
-                jobId, daily, sleep, hrv, activities);
+        int training = upsertTrainingStatus(accountId, request.trainingStatus());
+        int ftp = upsertFtpHistory(accountId, request.ftpHistory());
+        // 心率区间会先删后插，放在同一事务里，避免中途失败留下半份数据
+        int zones = upsertActivityHrZones(accountId, request.activityHrZones());
+        log.info("同步数据已入库 jobId={} daily={} sleep={} hrv={} activity={} "
+                        + "training={} ftp={} hrZone={}",
+                jobId, daily, sleep, hrv, activities, training, ftp, zones);
     }
 
     @Override
@@ -747,6 +769,141 @@ public class SyncServiceImpl implements SyncService {
                 activityMapper.updateById(entity);
             }
             affected++;
+        }
+        return affected;
+    }
+
+    /**
+     * 覆盖写入每日训练状态与负荷。
+     *
+     * @param accountId 账号 ID
+     * @param rows      训练状态列表
+     * @return 处理条数
+     */
+    private int upsertTrainingStatus(Long accountId, List<TrainingStatusDto> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return 0;
+        }
+        int affected = 0;
+        for (TrainingStatusDto dto : rows) {
+            LocalDate date = parseDate(dto.calendarDate());
+            if (date == null) {
+                continue;
+            }
+            TrainingStatus existing = trainingStatusMapper.selectOne(
+                    Wrappers.<TrainingStatus>lambdaQuery()
+                            .eq(TrainingStatus::getGarminAccountId, accountId)
+                            .eq(TrainingStatus::getCalendarDate, date));
+            TrainingStatus entity = existing == null ? new TrainingStatus() : existing;
+            entity.setGarminAccountId(accountId);
+            entity.setCalendarDate(date);
+            entity.setTrainingStatus(dto.trainingStatus());
+            entity.setTrainingStatusPhrase(dto.trainingStatusPhrase());
+            entity.setAcwrPercent(dto.acwrPercent());
+            entity.setAcwrStatus(dto.acwrStatus());
+            entity.setAcwrRatio(dto.acwrRatio());
+            entity.setAcuteLoad(dto.acuteLoad());
+            entity.setChronicLoad(dto.chronicLoad());
+            entity.setChronicLoadMin(dto.chronicLoadMin());
+            entity.setChronicLoadMax(dto.chronicLoadMax());
+            entity.setLoadAerobicLow(dto.loadAerobicLow());
+            entity.setLoadAerobicLowTargetMin(dto.loadAerobicLowTargetMin());
+            entity.setLoadAerobicLowTargetMax(dto.loadAerobicLowTargetMax());
+            entity.setLoadAerobicHigh(dto.loadAerobicHigh());
+            entity.setLoadAerobicHighTargetMin(dto.loadAerobicHighTargetMin());
+            entity.setLoadAerobicHighTargetMax(dto.loadAerobicHighTargetMax());
+            entity.setLoadAnaerobic(dto.loadAnaerobic());
+            entity.setLoadAnaerobicTargetMin(dto.loadAnaerobicTargetMin());
+            entity.setLoadAnaerobicTargetMax(dto.loadAnaerobicTargetMax());
+            entity.setBalanceFeedbackPhrase(dto.balanceFeedbackPhrase());
+            entity.setVo2maxValue(dto.vo2maxValue());
+            entity.setFitnessAge(dto.fitnessAge());
+            if (existing == null) {
+                trainingStatusMapper.insert(entity);
+            } else {
+                trainingStatusMapper.updateById(entity);
+            }
+            affected++;
+        }
+        return affected;
+    }
+
+    /**
+     * 覆盖写入骑行 FTP 历史，按 (账号, 生效日期) 去重。
+     *
+     * @param accountId 账号 ID
+     * @param rows      FTP 列表
+     * @return 处理条数
+     */
+    private int upsertFtpHistory(Long accountId, List<FtpHistoryDto> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return 0;
+        }
+        int affected = 0;
+        for (FtpHistoryDto dto : rows) {
+            LocalDate date = parseDate(dto.effectiveDate());
+            if (date == null || dto.ftpWatts() == null || dto.ftpWatts() <= 0) {
+                continue;
+            }
+            FtpHistory existing = ftpHistoryMapper.selectOne(Wrappers.<FtpHistory>lambdaQuery()
+                    .eq(FtpHistory::getGarminAccountId, accountId)
+                    .eq(FtpHistory::getEffectiveDate, date));
+            FtpHistory entity = existing == null ? new FtpHistory() : existing;
+            entity.setGarminAccountId(accountId);
+            entity.setEffectiveDate(date);
+            entity.setFtpWatts(dto.ftpWatts());
+            entity.setSource(SOURCE_GARMIN);
+            if (existing == null) {
+                ftpHistoryMapper.insert(entity);
+            } else {
+                ftpHistoryMapper.updateById(entity);
+            }
+            affected++;
+        }
+        return affected;
+    }
+
+    /**
+     * 覆盖写入活动心率区间。
+     *
+     * <p>区间个数会随账号心率设置变化，所以先按活动清空再整份写入，
+     * 否则设置从 6 区改回 5 区时会留下一条过期的高区间记录。</p>
+     *
+     * @param accountId 账号 ID
+     * @param zones     活动 ID 到区间列表的映射，键为 Garmin 活动 ID
+     * @return 处理条数
+     */
+    private int upsertActivityHrZones(Long accountId, Map<Long, List<ActivityHrZoneDto>> zones) {
+        if (zones == null || zones.isEmpty()) {
+            return 0;
+        }
+        int affected = 0;
+        for (Map.Entry<Long, List<ActivityHrZoneDto>> entry : zones.entrySet()) {
+            List<ActivityHrZoneDto> rows = entry.getValue();
+            if (rows == null || rows.isEmpty()) {
+                continue;
+            }
+            // 必须按账号限定，否则别人的活动 ID 也能被写进来
+            Activity activity = activityMapper.selectOne(Wrappers.<Activity>lambdaQuery()
+                    .eq(Activity::getGarminAccountId, accountId)
+                    .eq(Activity::getGarminActivityId, entry.getKey()));
+            if (activity == null) {
+                continue;
+            }
+            activityHrZoneMapper.delete(Wrappers.<ActivityHrZone>lambdaQuery()
+                    .eq(ActivityHrZone::getActivityId, activity.getId()));
+            for (ActivityHrZoneDto dto : rows) {
+                if (dto.zoneNumber() == null) {
+                    continue;
+                }
+                ActivityHrZone zone = new ActivityHrZone();
+                zone.setActivityId(activity.getId());
+                zone.setZoneNumber(dto.zoneNumber());
+                zone.setZoneLowBoundary(dto.zoneLowBoundary());
+                zone.setSecondsInZone(dto.secondsInZone() == null ? 0 : dto.secondsInZone());
+                activityHrZoneMapper.insert(zone);
+                affected++;
+            }
         }
         return affected;
     }

@@ -3,6 +3,7 @@ package com.trainingplan.platform.service;
 import com.trainingplan.platform.common.api.PageResult;
 import com.trainingplan.platform.dto.activity.ActivityDetailDto;
 import com.trainingplan.platform.dto.activity.ActivityQuery;
+import com.trainingplan.platform.dto.activity.ActivityHrZoneViewDto;
 import com.trainingplan.platform.dto.activity.ActivitySummaryDto;
 
 import java.util.List;
@@ -40,4 +41,13 @@ public interface ActivityService {
      * @return 按稳定标识排序的类型列表
      */
     List<String> listActivityTypes(Long userId);
+
+    /**
+     * 查询某次活动的心率区间分布。
+     *
+     * @param userId     当前登录用户 ID
+     * @param activityId 活动主键
+     * @return 按区间序号升序的心率区间
+     */
+    List<ActivityHrZoneViewDto> listHrZones(Long userId, Long activityId);
 }

@@ -5,6 +5,7 @@ import com.trainingplan.platform.common.api.Result;
 import com.trainingplan.platform.common.error.ErrorCode;
 import com.trainingplan.platform.common.exception.BusinessException;
 import com.trainingplan.platform.dto.activity.ActivityDetailDto;
+import com.trainingplan.platform.dto.activity.ActivityHrZoneViewDto;
 import com.trainingplan.platform.dto.activity.ActivityQuery;
 import com.trainingplan.platform.dto.activity.ActivitySummaryDto;
 import com.trainingplan.platform.service.ActivityService;
@@ -58,6 +59,20 @@ public class ActivityController {
             @PathVariable Long id,
             @AuthenticationPrincipal Jwt jwt) {
         return Result.success(activityService.getActivity(currentUserId(jwt), id));
+    }
+
+    /**
+     * 查询某次活动的心率区间分布。
+     *
+     * @param id  活动主键
+     * @param jwt 当前登录令牌
+     * @return 按区间序号升序的心率区间
+     */
+    @GetMapping("/{id}/hr-zones")
+    public Result<List<ActivityHrZoneViewDto>> listHrZones(
+            @PathVariable Long id,
+            @AuthenticationPrincipal Jwt jwt) {
+        return Result.success(activityService.listHrZones(currentUserId(jwt), id));
     }
 
     /**

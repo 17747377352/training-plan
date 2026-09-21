@@ -8,11 +8,14 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.trainingplan.platform.common.api.PageResult;
 import com.trainingplan.platform.common.error.ErrorCode;
 import com.trainingplan.platform.common.exception.BusinessException;
+import com.trainingplan.platform.dto.activity.ActivityHrZoneViewDto;
 import com.trainingplan.platform.dto.activity.ActivityDetailDto;
 import com.trainingplan.platform.dto.activity.ActivityQuery;
 import com.trainingplan.platform.dto.activity.ActivitySummaryDto;
 import com.trainingplan.platform.entity.Activity;
+import com.trainingplan.platform.entity.ActivityHrZone;
 import com.trainingplan.platform.entity.GarminAccount;
+import com.trainingplan.platform.mapper.ActivityHrZoneMapper;
 import com.trainingplan.platform.mapper.ActivityMapper;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.service.impl.ActivityServiceImpl;
@@ -20,6 +23,7 @@ import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -41,6 +45,8 @@ class ActivityServiceTest {
     @Mock
     private ActivityMapper activityMapper;
     @Mock
+    private ActivityHrZoneMapper activityHrZoneMapper;
+    @Mock
     private GarminAccountMapper garminAccountMapper;
     @Mock
     private UserService userService;
@@ -55,7 +61,10 @@ class ActivityServiceTest {
         TableInfoHelper.initTableInfo(
                 new MapperBuilderAssistant(new MybatisConfiguration(), "activity-test"),
                 Activity.class);
-        activityService = new ActivityServiceImpl(activityMapper, garminAccountMapper, userService);
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), "activity-test"),
+                ActivityHrZone.class);
+        activityService = new ActivityServiceImpl(activityMapper, activityHrZoneMapper, garminAccountMapper, userService);
     }
 
     @Test
@@ -195,5 +204,71 @@ class ActivityServiceTest {
         activity.setTrainingStressScore(235D);
         activity.setIntensityFactor(0.78D);
         return activity;
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldScopeActivityDetailToCallersAccounts() {
+        GarminAccount account = new GarminAccount();
+        account.setId(11L);
+        when(garminAccountMapper.selectList(any(Wrapper.class))).thenReturn(List.of(account));
+        when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(activity());
+
+        activityService.getActivity(7L, 1L);
+
+        ArgumentCaptor<Wrapper<Activity>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(activityMapper).selectOne(captor.capture());
+        // 只按主键取活动会让别人账号的活动详情被读到
+        assertThat(captor.getValue().getTargetSql())
+                .contains("garmin_account_id")
+                .contains("id");
+        assertThat(((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>) captor.getValue())
+                .getParamNameValuePairs().values()).contains(11L);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldReturnHrZonesOfOwnedActivity() {
+        GarminAccount account = new GarminAccount();
+        account.setId(11L);
+        when(garminAccountMapper.selectList(any(Wrapper.class))).thenReturn(List.of(account));
+        Activity activity = new Activity();
+        activity.setId(77L);
+        when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(activity);
+
+        ActivityHrZone zone = new ActivityHrZone();
+        zone.setActivityId(77L);
+        zone.setZoneNumber(4);
+        zone.setZoneLowBoundary(159);
+        zone.setSecondsInZone(8700);
+        when(activityHrZoneMapper.selectList(any(Wrapper.class))).thenReturn(List.of(zone));
+
+        List<ActivityHrZoneViewDto> zones = activityService.listHrZones(7L, 77L);
+
+        assertThat(zones).singleElement().satisfies(row -> {
+            assertThat(row.zoneNumber()).isEqualTo(4);
+            assertThat(row.zoneLowBoundary()).isEqualTo(159);
+            assertThat(row.secondsInZone()).isEqualTo(8700);
+        });
+
+        ArgumentCaptor<Wrapper<Activity>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(activityMapper).selectOne(captor.capture());
+        // 只看活动主键会让别人账号的活动也被读到
+        assertThat(captor.getValue().getTargetSql()).contains("garmin_account_id");
+    }
+
+    @Test
+    void shouldRejectHrZonesOfAnotherUsersActivity() {
+        GarminAccount account = new GarminAccount();
+        account.setId(11L);
+        when(garminAccountMapper.selectList(any(Wrapper.class))).thenReturn(List.of(account));
+        when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
+        assertThatThrownBy(() -> activityService.listHrZones(7L, 77L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(ErrorCode.NOT_FOUND);
+
+        verify(activityHrZoneMapper, never()).selectList(any(Wrapper.class));
     }
 }

@@ -382,3 +382,230 @@ async def test_business_error_code_aborts_job_instead_of_reporting_success(monke
     assert "/internal/collector/jobs/21/fail" in paths
     assert "/internal/collector/jobs/21/ingest" not in paths
     assert "/internal/collector/jobs/21/complete" not in paths
+
+
+# --- 训练状态 / FTP / 心率区间：字段名依据 2026-09-21 实拉响应 ---
+
+DEVICE_ID = 3610031482
+
+
+def _training_status_payload(primary=True, device_id=DEVICE_ID):
+    """与真实 get_training_status 响应同构（按设备 ID 分组）。"""
+
+    return {
+        "mostRecentVO2Max": {
+            "generic": {"calendarDate": "2026-09-19", "vo2MaxValue": 59.0, "fitnessAge": 20}
+        },
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                str(device_id): {
+                    "deviceId": device_id,
+                    "calendarDate": "2026-09-21",
+                    "primaryTrainingDevice": primary,
+                    "trainingStatus": 7,
+                    "trainingStatusFeedbackPhrase": "PRODUCTIVE_6",
+                    "acuteTrainingLoadDTO": {
+                        "acwrPercent": 52,
+                        "acwrStatus": "OPTIMAL",
+                        "dailyAcuteChronicWorkloadRatio": 1.2,
+                        "dailyTrainingLoadAcute": 819,
+                        "dailyTrainingLoadChronic": 658,
+                        "minTrainingLoadChronic": 526.4,
+                        "maxTrainingLoadChronic": 987.0,
+                    },
+                }
+            }
+        },
+        "mostRecentTrainingLoadBalance": {
+            "metricsTrainingLoadBalanceDTOMap": {
+                str(device_id): {
+                    "monthlyLoadAerobicLow": 157.42,
+                    "monthlyLoadAerobicLowTargetMin": 433,
+                    "monthlyLoadAerobicLowTargetMax": 952,
+                    "monthlyLoadAerobicHigh": 2161.64,
+                    "monthlyLoadAerobicHighTargetMin": 519,
+                    "monthlyLoadAerobicHighTargetMax": 1039,
+                    "monthlyLoadAnaerobic": 231.98,
+                    "monthlyLoadAnaerobicTargetMin": 173,
+                    "monthlyLoadAnaerobicTargetMax": 519,
+                    "trainingBalanceFeedbackPhrase": "AEROBIC_LOW_SHORTAGE",
+                }
+            }
+        },
+    }
+
+
+def test_training_status_row_maps_load_and_balance():
+    row = build_worker()._training_status_row(_training_status_payload(), "2026-09-21")
+
+    assert row is not None
+    assert row["calendarDate"] == "2026-09-21"
+    assert row["acuteLoad"] == 819
+    assert row["chronicLoad"] == 658
+    assert row["chronicLoadMin"] == 526.4
+    assert row["acwrPercent"] == 52
+    assert row["acwrStatus"] == "OPTIMAL"
+    assert row["acwrRatio"] == 1.2
+    assert row["trainingStatusPhrase"] == "PRODUCTIVE_6"
+    # 负荷平衡来自另一个分组，必须按同一台设备取
+    assert row["loadAerobicLow"] == 157.42
+    assert row["loadAerobicLowTargetMin"] == 433
+    assert row["loadAerobicHigh"] == 2161.64
+    assert row["balanceFeedbackPhrase"] == "AEROBIC_LOW_SHORTAGE"
+    assert row["vo2maxValue"] == 59.0
+    assert row["fitnessAge"] == 20
+
+
+def test_training_status_row_prefers_primary_device():
+    payload = _training_status_payload(primary=False, device_id=111)
+    payload["mostRecentTrainingStatus"]["latestTrainingStatusData"][str(DEVICE_ID)] = {
+        "deviceId": DEVICE_ID,
+        "calendarDate": "2026-09-21",
+        "primaryTrainingDevice": True,
+        "trainingStatus": 7,
+        "acuteTrainingLoadDTO": {"dailyTrainingLoadAcute": 819, "dailyTrainingLoadChronic": 658},
+    }
+    payload["mostRecentTrainingLoadBalance"]["metricsTrainingLoadBalanceDTOMap"][str(DEVICE_ID)] = {
+        "monthlyLoadAerobicLow": 157.42,
+        "trainingBalanceFeedbackPhrase": "AEROBIC_LOW_SHORTAGE",
+    }
+
+    row = build_worker()._training_status_row(payload, "2026-09-21")
+
+    # 不能拿到哪台算哪台：非主设备那条的急性负荷是空的
+    assert row["acuteLoad"] == 819
+    assert row["loadAerobicLow"] == 157.42
+
+
+def test_training_status_row_returns_none_without_data():
+    assert build_worker()._training_status_row({}, "2026-09-21") is None
+    assert build_worker()._training_status_row({"mostRecentTrainingStatus": {}}, "2026-09-21") is None
+
+
+def test_hr_zone_rows_sorted_and_typed():
+    zones = [
+        {"zoneNumber": 5, "zoneLowBoundary": 179, "secsInZone": 828.0},
+        {"zoneNumber": 1, "zoneLowBoundary": 100, "secsInZone": 1476.0},
+    ]
+
+    rows = build_worker()._hr_zone_rows(zones)
+
+    assert [r["zoneNumber"] for r in rows] == [1, 5]
+    assert rows[0]["secondsInZone"] == 1476
+    assert rows[1]["zoneLowBoundary"] == 179
+    # 缺失的秒数按 0 处理，不要写成 null
+    assert build_worker()._hr_zone_rows([{"zoneNumber": 2}])[0]["secondsInZone"] == 0
+
+
+def test_ftp_rows_from_history_series():
+    class _Client:
+        def get_functional_threshold_power_range(self, start, end, sport=None):
+            assert sport == "CYCLING", "取骑行 FTP 必须显式指定 sport"
+            return [
+                {"from": "2026-07-22", "until": "2026-07-22", "value": 219.0},
+                {"from": "2026-08-22", "until": "2026-08-22", "value": 216.0},
+                {"from": "2026-06-26", "until": "2026-06-26", "value": 211.0},
+            ]
+
+        def get_cycling_ftp(self):
+            raise AssertionError("有历史时不该再查当前值")
+
+    class _Adapter:
+        client = _Client()
+
+    rows = build_worker()._ftp_rows(_Adapter())
+
+    assert [r["effectiveDate"] for r in rows] == ["2026-06-26", "2026-07-22", "2026-08-22"]
+    assert rows[-1]["ftpWatts"] == 216
+
+
+def test_ftp_rows_falls_back_to_current_value():
+    class _Client:
+        def get_functional_threshold_power_range(self, start, end, sport=None):
+            return []
+
+        def get_cycling_ftp(self):
+            return {"calendarDate": "2026-08-29T17:25:41.0", "functionalThresholdPower": 213}
+
+    class _Adapter:
+        client = _Client()
+
+    rows = build_worker()._ftp_rows(_Adapter())
+
+    assert rows == [{"effectiveDate": "2026-08-29", "ftpWatts": 213}]
+
+
+def test_ftp_rows_skip_entries_without_value():
+    class _Client:
+        def get_functional_threshold_power_range(self, start, end, sport=None):
+            return [{"from": "2026-07-01", "value": None}, {"from": "", "value": 200}]
+
+        def get_cycling_ftp(self):
+            return {}
+
+    class _Adapter:
+        client = _Client()
+
+    assert build_worker()._ftp_rows(_Adapter()) == []
+
+
+def test_collect_uses_hrv_range_endpoint_and_returns_all_payload_keys():
+    """HRV 走区间接口（一次请求），且上报载荷包含新增的三类数据。"""
+
+    calls: list[tuple] = []
+
+    class _Client:
+        def get_hrv_data_range(self, start, end):
+            calls.append(("hrv_range", start, end))
+            return {
+                "hrvSummaries": [
+                    {"calendarDate": "2026-09-19", "lastNightAvg": 79, "weeklyAvg": 77,
+                     "status": "UNBALANCED",
+                     "baseline": {"lowUpper": 75, "balancedLow": 81, "balancedUpper": 106}},
+                    {"calendarDate": "2026-09-20", "lastNightAvg": 70, "weeklyAvg": 79,
+                     "status": "UNBALANCED",
+                     "baseline": {"lowUpper": 75, "balancedLow": 80, "balancedUpper": 107}},
+                ]
+            }
+
+        def get_hrv_data(self, day):
+            raise AssertionError("HRV 应走区间接口，不该再逐日拉取")
+
+        def get_training_status(self, day):
+            calls.append(("training_status", day))
+            return {}
+
+        def get_activities_by_date(self, start, end, kind=None, order=None):
+            calls.append(("activities", start, end, kind))
+            return []
+
+        def get_activity_hr_in_timezones(self, activity_id):
+            raise AssertionError("没有活动时不该请求心率区间")
+
+        def get_functional_threshold_power_range(self, start, end, sport=None):
+            return [{"from": "2026-08-29", "value": 213}]
+
+        def get_cycling_ftp(self):
+            return {}
+
+    class _Adapter:
+        client = _Client()
+
+        def get_daily_stats(self, day):
+            return None
+
+        def get_sleep_data(self, day):
+            return None
+
+    result = build_worker()._collect(_Adapter(), "2026-09-19", "2026-09-21", "GLOBAL")
+
+    # 区间接口一次拿整段，而不是每天一次
+    assert [c for c in calls if c[0] == "hrv_range"] == [("hrv_range", "2026-09-19", "2026-09-21")]
+    assert len([c for c in calls if c[0] == "training_status"]) == 3
+    assert [r["calendarDate"] for r in result["hrv"]] == ["2026-09-19", "2026-09-20"]
+    assert result["ftpHistory"] == [{"effectiveDate": "2026-08-29", "ftpWatts": 213}]
+    # 载荷键名与平台 SyncIngestRequest 的字段一一对应
+    assert set(result) == {
+        "dailyHealth", "sleep", "hrv", "activities",
+        "trainingStatus", "ftpHistory", "activityHrZones",
+    }

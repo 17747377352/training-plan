@@ -8,10 +8,13 @@ import com.trainingplan.platform.common.api.PageResult;
 import com.trainingplan.platform.common.error.ErrorCode;
 import com.trainingplan.platform.common.exception.BusinessException;
 import com.trainingplan.platform.dto.activity.ActivityDetailDto;
+import com.trainingplan.platform.dto.activity.ActivityHrZoneViewDto;
 import com.trainingplan.platform.dto.activity.ActivityQuery;
 import com.trainingplan.platform.dto.activity.ActivitySummaryDto;
 import com.trainingplan.platform.entity.Activity;
+import com.trainingplan.platform.entity.ActivityHrZone;
 import com.trainingplan.platform.entity.GarminAccount;
+import com.trainingplan.platform.mapper.ActivityHrZoneMapper;
 import com.trainingplan.platform.mapper.ActivityMapper;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.service.ActivityService;
@@ -38,6 +41,7 @@ import java.util.List;
 public class ActivityServiceImpl implements ActivityService {
 
     private final ActivityMapper activityMapper;
+    private final ActivityHrZoneMapper activityHrZoneMapper;
     private final GarminAccountMapper garminAccountMapper;
     private final UserService userService;
 
@@ -86,6 +90,41 @@ public class ActivityServiceImpl implements ActivityService {
             throw activityNotFound();
         }
         return toDetail(activity);
+    }
+
+    @Override
+    public List<ActivityHrZoneViewDto> listHrZones(Long userId, Long activityId) {
+        // 先按归属取活动，取不到就与「活动不存在」同样处理，不泄露别人活动的存在
+        Activity activity = ownedActivity(userId, activityId);
+        return activityHrZoneMapper.selectList(Wrappers.<ActivityHrZone>lambdaQuery()
+                        .eq(ActivityHrZone::getActivityId, activity.getId())
+                        .orderByAsc(ActivityHrZone::getZoneNumber))
+                .stream()
+                .map(zone -> new ActivityHrZoneViewDto(
+                        zone.getZoneNumber(), zone.getZoneLowBoundary(), zone.getSecondsInZone()))
+                .toList();
+    }
+
+    /**
+     * 取当前用户名下的活动，找不到即抛 404。
+     *
+     * @param userId     当前登录用户 ID
+     * @param activityId 活动主键
+     * @return 活动实体
+     */
+    private Activity ownedActivity(Long userId, Long activityId) {
+        userService.getProfile(userId);
+        List<Long> accountIds = findAccountIds(userId);
+        if (accountIds.isEmpty()) {
+            throw activityNotFound();
+        }
+        Activity activity = activityMapper.selectOne(Wrappers.<Activity>lambdaQuery()
+                .eq(Activity::getId, activityId)
+                .in(Activity::getGarminAccountId, accountIds));
+        if (activity == null) {
+            throw activityNotFound();
+        }
+        return activity;
     }
 
     @Override

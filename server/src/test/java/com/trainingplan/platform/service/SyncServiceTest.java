@@ -1,28 +1,40 @@
 package com.trainingplan.platform.service;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trainingplan.platform.common.error.ErrorCode;
 import com.trainingplan.platform.common.exception.BusinessException;
+import com.trainingplan.platform.dto.sync.ActivityHrZoneDto;
 import com.trainingplan.platform.dto.sync.DailyHealthDto;
+import com.trainingplan.platform.dto.sync.FtpHistoryDto;
 import com.trainingplan.platform.dto.sync.HrvRecordDto;
+import com.trainingplan.platform.dto.sync.TrainingStatusDto;
 import com.trainingplan.platform.dto.sync.SleepRecordDto;
 import com.trainingplan.platform.dto.sync.SyncIngestRequest;
 import com.trainingplan.platform.dto.sync.ActivityDto;
+import com.trainingplan.platform.entity.ActivityHrZone;
 import com.trainingplan.platform.entity.Activity;
 import com.trainingplan.platform.entity.DailyHealth;
 import com.trainingplan.platform.entity.GarminAccount;
+import com.trainingplan.platform.entity.FtpHistory;
 import com.trainingplan.platform.entity.HrvRecord;
+import com.trainingplan.platform.entity.TrainingStatus;
 import com.trainingplan.platform.entity.SleepRecord;
 import com.trainingplan.platform.entity.SyncJob;
+import com.trainingplan.platform.mapper.ActivityHrZoneMapper;
 import com.trainingplan.platform.mapper.ActivityMapper;
 import com.trainingplan.platform.mapper.DailyHealthMapper;
+import com.trainingplan.platform.mapper.FtpHistoryMapper;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.mapper.HrvRecordMapper;
+import com.trainingplan.platform.mapper.TrainingStatusMapper;
 import com.trainingplan.platform.mapper.SleepRecordMapper;
 import com.trainingplan.platform.mapper.SyncJobMapper;
 import com.trainingplan.platform.security.TokenCipher;
 import com.trainingplan.platform.service.impl.SyncServiceImpl;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -34,6 +46,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -66,6 +79,12 @@ class SyncServiceTest {
     @Mock
     private HrvRecordMapper hrvRecordMapper;
     @Mock
+    private TrainingStatusMapper trainingStatusMapper;
+    @Mock
+    private FtpHistoryMapper ftpHistoryMapper;
+    @Mock
+    private ActivityHrZoneMapper activityHrZoneMapper;
+    @Mock
     private TokenCipher tokenCipher;
     @Mock
     private StringRedisTemplate redisTemplate;
@@ -78,8 +97,17 @@ class SyncServiceTest {
 
     @BeforeEach
     void setUp() {
+        // 必须自己注册：lambda 缓存是全局静态的，靠别的测试类先跑会随执行顺序变化
+        MybatisConfiguration configuration = new MybatisConfiguration();
+        MapperBuilderAssistant assistant = new MapperBuilderAssistant(configuration, "sync-service-test");
+        for (Class<?> entity : List.of(SyncJob.class, GarminAccount.class, DailyHealth.class,
+                SleepRecord.class, HrvRecord.class, Activity.class, TrainingStatus.class,
+                FtpHistory.class, ActivityHrZone.class)) {
+            TableInfoHelper.initTableInfo(assistant, entity);
+        }
         syncService = new SyncServiceImpl(syncJobMapper, accountMapper, activityMapper,
-                dailyHealthMapper, sleepRecordMapper, hrvRecordMapper, tokenCipher, redisTemplate,
+                dailyHealthMapper, sleepRecordMapper, hrvRecordMapper, trainingStatusMapper,
+                ftpHistoryMapper, activityHrZoneMapper, tokenCipher, redisTemplate,
                 new ObjectMapper(), userService);
         ReflectionTestUtils.setField(syncService, "taskQueue", "training-plan:sync:jobs");
     }
@@ -142,7 +170,7 @@ class SyncServiceTest {
         when(sleepRecordMapper.selectOne(any(Wrapper.class))).thenReturn(null);
         when(hrvRecordMapper.selectOne(any(Wrapper.class))).thenReturn(null);
 
-        syncService.ingest(1L, new SyncIngestRequest(
+        syncService.ingest(1L, ingestOf(
                 List.of(new DailyHealthDto("2026-09-20", 2795, 2280.0, 1481.0, 300.0, 51, 45, 120, 20, 61, 20)),
                 List.of(new SleepRecordDto("2026-09-20", "2026-09-19T17:00:00", "2026-09-20T00:00:00",
                         26460, 6720, 15000, 3000, 600, 80, 52.3, 96.0, 14.2)),
@@ -161,7 +189,7 @@ class SyncServiceTest {
         when(sleepRecordMapper.selectOne(any(Wrapper.class))).thenReturn(new SleepRecord());
         when(hrvRecordMapper.selectOne(any(Wrapper.class))).thenReturn(new HrvRecord());
 
-        syncService.ingest(1L, new SyncIngestRequest(
+        syncService.ingest(1L, ingestOf(
                 List.of(new DailyHealthDto("2026-09-20", 1, null, null, null, null, null, null, null, null, null)),
                 List.of(new SleepRecordDto("2026-09-20", "2026-09-19T17:00:00", null,
                         null, null, null, null, null, null, null, null, null)),
@@ -179,7 +207,7 @@ class SyncServiceTest {
     void shouldSkipRowsWithUnparsableDate() {
         when(syncJobMapper.selectById(1L)).thenReturn(job());
 
-        syncService.ingest(1L, new SyncIngestRequest(
+        syncService.ingest(1L, ingestOf(
                 List.of(new DailyHealthDto("not-a-date", 1, null, null, null, null, null, null, null, null, null)),
                 List.of(new SleepRecordDto("2026-09-20", "bad-time", null, null, null, null, null, null, null, null, null, null)),
                 List.of(),
@@ -386,7 +414,7 @@ class SyncServiceTest {
         when(syncJobMapper.selectById(1L)).thenReturn(job());
         when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(null);
 
-        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(),
+        syncService.ingest(1L, ingestOf(List.of(), List.of(), List.of(),
                 List.of(new ActivityDto(12345678901L, "road_biking", 10, 2, "公路骑行",
                         "2026-09-19T00:53:51", "2026-09-19T08:53:51",
                         15299.0, 15280.0, 23489.0, 103550.0, 2322.0, 1907.0, 700.0, 1384.0, 503.0,
@@ -414,7 +442,7 @@ class SyncServiceTest {
         when(syncJobMapper.selectById(1L)).thenReturn(job());
         when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(new Activity());
 
-        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(),
+        syncService.ingest(1L, ingestOf(List.of(), List.of(), List.of(),
                 List.of(new ActivityDto(2L, "cycling", 2, 17, "骑行", null, null,
                         null, null, null, null, null, null, null, null, null, null, null,
                         null, null, null, null, null, null, null, null, null, null,
@@ -431,7 +459,7 @@ class SyncServiceTest {
         when(syncJobMapper.selectById(1L)).thenReturn(job());
         when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(null);
 
-        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(),
+        syncService.ingest(1L, ingestOf(List.of(), List.of(), List.of(),
                 List.of(new ActivityDto(1L, "road_biking", 10, 2, "骑行",
                         "2026-09-19 00:53:51", "2026-09-19T08:53:51",
                         null, null, null, null, null, null, null, null, null, null, null,
@@ -475,6 +503,150 @@ class SyncServiceTest {
             values.add(params.get(matcher.group()));
         }
         return values;
+    }
+
+    @Test
+    void shouldInsertTrainingStatusWithLoadAndBalance() {
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+        when(trainingStatusMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
+        ingestOf(List.of(), List.of(), List.of(), List.of());
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(),
+                List.of(new TrainingStatusDto("2026-09-21", 7, "PRODUCTIVE_6", 52, "OPTIMAL", 1.2,
+                        819, 658, 526.4, 987.0,
+                        157.42, 433, 952, 2161.64, 519, 1039, 231.98, 173, 519,
+                        "AEROBIC_LOW_SHORTAGE", 59.0, 20)),
+                List.of(), java.util.Map.of()));
+
+        ArgumentCaptor<TrainingStatus> captor = ArgumentCaptor.forClass(TrainingStatus.class);
+        verify(trainingStatusMapper).insert(captor.capture());
+        TrainingStatus saved = captor.getValue();
+        assertThat(saved.getGarminAccountId()).isEqualTo(ACCOUNT_ID);
+        assertThat(saved.getCalendarDate()).isEqualTo(LocalDate.of(2026, 9, 21));
+        assertThat(saved.getAcuteLoad()).isEqualTo(819);
+        assertThat(saved.getChronicLoad()).isEqualTo(658);
+        assertThat(saved.getAcwrPercent()).isEqualTo(52);
+        assertThat(saved.getLoadAerobicLow()).isEqualTo(157.42);
+        assertThat(saved.getLoadAerobicLowTargetMin()).isEqualTo(433);
+        assertThat(saved.getBalanceFeedbackPhrase()).isEqualTo("AEROBIC_LOW_SHORTAGE");
+        assertThat(saved.getVo2maxValue()).isEqualTo(59.0);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldScopeTrainingStatusToCallersAccount() {
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+        when(trainingStatusMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(),
+                List.of(new TrainingStatusDto("2026-09-21", 7, null, null, null, null,
+                        null, null, null, null, null, null, null, null, null, null,
+                        null, null, null, null, null, null)),
+                List.of(), java.util.Map.of()));
+
+        ArgumentCaptor<Wrapper<TrainingStatus>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(trainingStatusMapper).selectOne(captor.capture());
+        assertThat(captor.getValue().getTargetSql()).contains("garmin_account_id");
+        assertThat(((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>) captor.getValue())
+                .getParamNameValuePairs().values()).contains(ACCOUNT_ID);
+    }
+
+    @Test
+    void shouldUpsertFtpHistoryByEffectiveDate() {
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+        when(ftpHistoryMapper.selectOne(any(Wrapper.class))).thenReturn(new FtpHistory());
+
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(new FtpHistoryDto("2026-08-22", 216)),
+                java.util.Map.of()));
+
+        ArgumentCaptor<FtpHistory> captor = ArgumentCaptor.forClass(FtpHistory.class);
+        verify(ftpHistoryMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getEffectiveDate()).isEqualTo(LocalDate.of(2026, 8, 22));
+        assertThat(captor.getValue().getFtpWatts()).isEqualTo(216);
+        assertThat(captor.getValue().getSource()).isEqualTo("GARMIN");
+        verify(ftpHistoryMapper, never()).insert(any(FtpHistory.class));
+    }
+
+    @Test
+    void shouldSkipFtpRowWithoutUsableValue() {
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(new FtpHistoryDto("2026-08-22", null),
+                        new FtpHistoryDto("2026-08-23", 0),
+                        new FtpHistoryDto("not-a-date", 210)),
+                java.util.Map.of()));
+
+        verify(ftpHistoryMapper, never()).insert(any(FtpHistory.class));
+        verify(ftpHistoryMapper, never()).updateById(any(FtpHistory.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldReplaceHrZonesInsteadOfAppending() {
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+        Activity activity = new Activity();
+        activity.setId(77L);
+        activity.setGarminActivityId(24415659141L);
+        when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(activity);
+
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(),
+                java.util.Map.of(24415659141L, List.of(
+                        new ActivityHrZoneDto(1, 100, 1476),
+                        new ActivityHrZoneDto(5, 179, 828)))));
+
+        // 区间个数会随账号设置变化，必须先清空再写入，否则会残留过期区间
+        ArgumentCaptor<Wrapper<ActivityHrZone>> deleteCaptor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(activityHrZoneMapper).delete(deleteCaptor.capture());
+        assertThat(deleteCaptor.getValue().getTargetSql()).contains("activity_id");
+
+        ArgumentCaptor<ActivityHrZone> insertCaptor = ArgumentCaptor.forClass(ActivityHrZone.class);
+        verify(activityHrZoneMapper, times(2)).insert(insertCaptor.capture());
+        assertThat(insertCaptor.getAllValues())
+                .allSatisfy(zone -> assertThat(zone.getActivityId()).isEqualTo(77L));
+        assertThat(insertCaptor.getAllValues().get(0).getSecondsInZone()).isEqualTo(1476);
+        assertThat(insertCaptor.getAllValues().get(1).getZoneLowBoundary()).isEqualTo(179);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldResolveHrZoneActivityWithinCallersAccountOnly() {
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+        Activity activity = new Activity();
+        activity.setId(77L);
+        when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(activity);
+
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(),
+                java.util.Map.of(24415659141L, List.of(new ActivityHrZoneDto(1, 100, 60)))));
+
+        ArgumentCaptor<Wrapper<Activity>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(activityMapper).selectOne(captor.capture());
+        // 只看 garmin_activity_id 会让别人账号的同 ID 活动被写入
+        assertThat(captor.getValue().getTargetSql())
+                .contains("garmin_account_id")
+                .contains("garmin_activity_id");
+        assertThat(((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>) captor.getValue())
+                .getParamNameValuePairs().values()).contains(ACCOUNT_ID);
+    }
+
+    /**
+     * 只关心前四类数据的用例用这个重载，训练状态 / FTP / 心率区间传空列表。
+     *
+     * @param daily      每日健康
+     * @param sleep      睡眠
+     * @param hrv        HRV
+     * @param activities 活动
+     * @return 上报请求
+     */
+    private static SyncIngestRequest ingestOf(List<DailyHealthDto> daily,
+                                              List<SleepRecordDto> sleep,
+                                              List<HrvRecordDto> hrv,
+                                              List<ActivityDto> activities) {
+        return new SyncIngestRequest(daily, sleep, hrv, activities,
+                List.of(), List.of(), java.util.Map.of());
     }
 
     private SyncJob job() {
