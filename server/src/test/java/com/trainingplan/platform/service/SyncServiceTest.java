@@ -41,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -70,6 +71,8 @@ class SyncServiceTest {
     private StringRedisTemplate redisTemplate;
     @Mock
     private ListOperations<String, String> listOperations;
+    @Mock
+    private UserService userService;
 
     private SyncService syncService;
 
@@ -77,7 +80,7 @@ class SyncServiceTest {
     void setUp() {
         syncService = new SyncServiceImpl(syncJobMapper, accountMapper, activityMapper,
                 dailyHealthMapper, sleepRecordMapper, hrvRecordMapper, tokenCipher, redisTemplate,
-                new ObjectMapper());
+                new ObjectMapper(), userService);
         ReflectionTestUtils.setField(syncService, "taskQueue", "training-plan:sync:jobs");
     }
 
@@ -189,16 +192,81 @@ class SyncServiceTest {
     @Test
     void shouldMarkCompleteAndTouchAccount() {
         when(syncJobMapper.selectById(1L)).thenReturn(job());
+        // 状态流转改成带状态条件的更新，影响行数为 1 才表示这次完成上报被接受
+        when(syncJobMapper.update(isNull(), any())).thenReturn(1);
 
         syncService.complete(1L);
 
-        ArgumentCaptor<SyncJob> jobCaptor = ArgumentCaptor.forClass(SyncJob.class);
-        verify(syncJobMapper).updateById(jobCaptor.capture());
-        assertThat(jobCaptor.getValue().getJobStatus()).isEqualTo("SUCCESS");
+        ArgumentCaptor<Wrapper<SyncJob>> jobCaptor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(syncJobMapper).update(isNull(), jobCaptor.capture());
+        assertThat(jobCaptor.getValue().getSqlSet())
+                .contains("job_status")
+                .contains("finished_time");
+        // 成功记录不能留着旧的失败原因（updateById 会忽略 null，必须 set 显式置空）
+        assertThat(jobCaptor.getValue().getSqlSet())
+                .contains("error_code")
+                .contains("error_message");
+        assertThat(whereValues(jobCaptor.getValue())).containsExactly(1L, "PENDING", "RUNNING");
 
         ArgumentCaptor<GarminAccount> accountCaptor = ArgumentCaptor.forClass(GarminAccount.class);
         verify(accountMapper).updateById(accountCaptor.capture());
         assertThat(accountCaptor.getValue().getLastSyncTime()).isNotNull();
+    }
+
+    @Test
+    void shouldOnlyAllowPendingToRunningTransition() {
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+        when(syncJobMapper.update(isNull(), any())).thenReturn(1);
+
+        syncService.markRunning(1L);
+
+        ArgumentCaptor<Wrapper<SyncJob>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(syncJobMapper).update(isNull(), captor.capture());
+        // 开跑的前提是任务仍在排队：已判超时的任务不能被迟到的队列消息复活
+        assertThat(whereValues(captor.getValue())).containsExactly(1L, "PENDING");
+    }
+
+    @Test
+    void shouldNotResurrectTerminalJobOnLateRunningReport() {
+        SyncJob failed = job();
+        failed.setJobStatus("FAILED");
+        when(syncJobMapper.selectById(1L)).thenReturn(failed);
+        // 条件更新要求 PENDING，任务已是终态 → 0 行受影响
+        when(syncJobMapper.update(isNull(), any())).thenReturn(0);
+
+        assertThatThrownBy(() -> syncService.markRunning(1L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(ErrorCode.NOT_FOUND);
+
+        verify(syncJobMapper, never()).updateById(any(SyncJob.class));
+    }
+
+    @Test
+    void shouldIgnoreLateCompleteForTerminalJob() {
+        SyncJob failed = job();
+        failed.setJobStatus("FAILED");
+        when(syncJobMapper.selectById(1L)).thenReturn(failed);
+        when(syncJobMapper.update(isNull(), any())).thenReturn(0);
+
+        syncService.complete(1L);
+
+        // 迟到的完成上报不能把已失败的任务翻成成功，也不能刷新账号同步时间
+        verify(accountMapper, never()).updateById(any(GarminAccount.class));
+    }
+
+    @Test
+    void shouldIgnoreLateFailureForAlreadySuccessfulJob() {
+        SyncJob succeeded = job();
+        succeeded.setJobStatus("SUCCESS");
+        when(syncJobMapper.update(isNull(), any())).thenReturn(0);
+
+        syncService.fail(1L, "GARMIN_RATE_LIMITED");
+
+        // 已成功的任务不能被迟到的失败上报翻掉，否则看板的「上次成功」会消失
+        ArgumentCaptor<Wrapper<SyncJob>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(syncJobMapper).update(isNull(), captor.capture());
+        assertThat(captor.getValue().getTargetSql()).contains("job_status");
     }
 
     @Test
@@ -386,6 +454,27 @@ class SyncServiceTest {
         account.setRegion("GLOBAL");
         account.setTokenCiphertext("cipher");
         return account;
+    }
+
+    /**
+     * 取出 wrapper 的 WHERE 条件（不含 SET 子句）实际用到的参数值。
+     *
+     * <p>只断言整条 SQL 里出现过某个列名是无效的：{@code set()} 和 {@code in()}
+     * 的参数混在同一个 Map 里，条件被放宽也一样能过。</p>
+     */
+    private static java.util.List<Object> whereValues(Wrapper<?> wrapper) {
+        wrapper.getSqlSet();
+        String segment = wrapper.getSqlSegment();
+        java.util.Map<String, Object> params =
+                ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>) wrapper)
+                        .getParamNameValuePairs();
+        java.util.List<Object> values = new java.util.ArrayList<>();
+        java.util.regex.Matcher matcher =
+                java.util.regex.Pattern.compile("MPGENVAL\\d+").matcher(segment);
+        while (matcher.find()) {
+            values.add(params.get(matcher.group()));
+        }
+        return values;
     }
 
     private SyncJob job() {

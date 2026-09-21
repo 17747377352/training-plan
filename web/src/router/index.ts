@@ -39,6 +39,12 @@ const router = createRouter({
           meta: { title: "Garmin 账号" },
         },
         {
+          path: "sync-jobs",
+          name: "sync-jobs",
+          component: () => import("../views/SyncJobsView.vue"),
+          meta: { title: "同步任务" },
+        },
+        {
           path: "export",
           name: "export",
           component: () => import("../views/DataExportView.vue"),

@@ -191,3 +191,51 @@ export interface SleepTrend {
   avgSpo2?: number | null;
   avgRespiration?: number | null;
 }
+
+export interface SyncJobQuery {
+  page?: number;
+  size?: number;
+  jobStatus?: string;
+  jobType?: string;
+  garminAccountId?: number;
+}
+
+export interface SyncJob {
+  id: number;
+  garminAccountId: number;
+  accountLabel: string;
+  jobType: string;
+  jobStatus: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  requestedBy?: number | null;
+  startedTime?: string | null;
+  finishedTime?: string | null;
+  durationSeconds?: number | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  retryOfJobId?: number | null;
+  createTime?: string | null;
+}
+
+export interface AccountSyncState {
+  accountId: number;
+  accountLabel: string;
+  authStatus: string;
+  syncEnabled?: number | null;
+  lastSyncTime?: string | null;
+  lastSuccessTime?: string | null;
+  lastFailureTime?: string | null;
+  lastErrorMessage?: string | null;
+  lastStartDate?: string | null;
+  lastEndDate?: string | null;
+}
+
+export interface SyncOverview {
+  lastSuccessTime?: string | null;
+  lastFailureTime?: string | null;
+  unfinishedCount: number;
+  failureCount7d: number;
+  hasGarminAccount: boolean;
+  accounts: AccountSyncState[];
+}

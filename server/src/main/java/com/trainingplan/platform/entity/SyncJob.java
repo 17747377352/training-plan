@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
@@ -30,6 +31,12 @@ public class SyncJob {
     /** 任务状态：PENDING、RUNNING、SUCCESS、FAILED。 */
     private String jobStatus;
 
+    /** 同步数据起始日期（含）。 */
+    private LocalDate startDate;
+
+    /** 同步数据结束日期（含）。 */
+    private LocalDate endDate;
+
     /** 发起用户 ID，定时任务为空。 */
     private Long requestedBy;
 
@@ -41,6 +48,12 @@ public class SyncJob {
 
     /** 脱敏错误编码。 */
     private String errorCode;
+
+    /** 脱敏失败原因，取自错误码文案。 */
+    private String errorMessage;
+
+    /** 重试来源任务 ID，非重试任务为空。 */
+    private Long retryOfJobId;
 
     /** 创建时间。 */
     private LocalDateTime createTime;

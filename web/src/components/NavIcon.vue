@@ -40,6 +40,12 @@ defineProps<{ name: NavIconName }>();
       <path d="M18.2 8.7v5" />
       <path d="M15.7 11.2h5" />
     </template>
+    <template v-else-if="name === 'sync'">
+      <path d="M20 11.5a8 8 0 0 0-13.8-5.4L3.5 8.6" />
+      <path d="M4 12.5a8 8 0 0 0 13.8 5.4l2.7-2.5" />
+      <path d="M3.5 4.6v4h4" />
+      <path d="M20.5 19.4v-4h-4" />
+    </template>
     <template v-else-if="name === 'export'">
       <path d="M12 3.5v11" />
       <path d="m8.2 10.8 3.8 3.8 3.8-3.8" />

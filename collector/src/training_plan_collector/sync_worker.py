@@ -33,6 +33,22 @@ ERROR_UNEXPECTED = "SYSTEM_ERROR"
 # 本期只同步骑行活动；徒步等其他类型不进入骑行统计。
 ACTIVITY_TYPE_CYCLING = "cycling"
 
+SUCCESS_CODE = 200
+
+
+class CollectorApiError(Exception):
+    """平台内部接口返回了非成功业务码。
+
+    平台的响应统一是 ``{"code": ..., "message": ..., "data": ...}``，业务失败
+    仍走 HTTP 200。只看 HTTP 状态码会把「任务已作废」当成执行成功，
+    于是采集器继续拉数、继续回传，日志里还会打出 sync_job_succeeded。
+    """
+
+    def __init__(self, path: str, code: Any, message: str | None):
+        super().__init__(f"{path} 返回业务码 {code}: {message}")
+        self.path = path
+        self.code = code
+
 
 def _datetime_to_iso(value: Any) -> str | None:
     """把 Garmin 的 "yyyy-MM-dd HH:mm:ss" 转成 ISO 的 T 分隔格式。
@@ -151,10 +167,20 @@ class SyncWorker:
             except ReadOnlyViolation as violation:
                 logger.warning("sync_job_read_only_violation", job_id=job_id, detail=str(violation))
                 await self._fail(client, job_id, ERROR_UNEXPECTED)
+            except CollectorApiError as error:
+                # 平台明确拒绝（例如任务已被判超时作废）：不要再拉数，也不要谎报成功
+                logger.warning(
+                    "sync_job_rejected", job_id=job_id, code=error.code, path=error.path
+                )
+                await self._fail(client, job_id, ERROR_UNEXPECTED)
             except httpx.HTTPError as error:
+                # 不在这里上报失败的话，任务会一直停在 RUNNING，
+                # 直到平台的僵死清理器在 60 分钟后才把它收敛成超时，
+                # 看板上就成了一条「超时」而不是真实原因的记录。
                 logger.warning(
                     "sync_job_http_error", job_id=job_id, error_type=type(error).__name__
                 )
+                await self._fail(client, job_id, ERROR_UNEXPECTED)
             except Exception as exception:  # noqa: BLE001
                 logger.warning(
                     "sync_job_failed", job_id=job_id, error_type=type(exception).__name__
@@ -366,14 +392,17 @@ class SyncWorker:
     ) -> dict[str, Any]:
         response = await client.post(path, json=body or {})
         response.raise_for_status()
-        return response.json().get("data") or {}
+        payload = response.json()
+        if payload.get("code") != SUCCESS_CODE:
+            raise CollectorApiError(path, payload.get("code"), payload.get("message"))
+        return payload.get("data") or {}
 
     async def _fail(self, client: httpx.AsyncClient, job_id: Any, error_code: str) -> None:
         try:
             await self._post(
                 client, f"/internal/collector/jobs/{job_id}/fail", {"errorCode": error_code}
             )
-        except httpx.HTTPError as error:
+        except (httpx.HTTPError, CollectorApiError) as error:
             logger.warning(
                 "sync_job_fail_report_failed", job_id=job_id, error_type=type(error).__name__
             )

@@ -2,6 +2,9 @@
 
 from datetime import UTC, datetime
 
+import httpx
+
+from training_plan_collector.garmin_auth import SessionOutcome
 from training_plan_collector.settings import CollectorSettings
 from training_plan_collector.sync_worker import SyncWorker, _gmt_to_iso
 
@@ -203,3 +206,149 @@ def test_activity_time_fields_tolerate_missing_values():
 
     assert row is not None
     assert row["startTimeGmt"] is None
+
+
+class _FakeResponse:
+    """最小响应替身，只实现 SyncWorker 用到的方法。"""
+
+    def __init__(
+        self, data: dict | None = None, status_code: int = 200, code: int = 200
+    ):
+        self._data = data or {}
+        self.status_code = status_code
+        # 平台业务码：HTTP 200 也可能是业务失败，采集器必须看这个字段
+        self._code = code
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"status {self.status_code}",
+                request=httpx.Request("POST", "http://platform.test"),
+                response=httpx.Response(self.status_code),
+            )
+
+    def json(self) -> dict:
+        return {"code": self._code, "message": "success", "data": self._data}
+
+
+class _FakeClient:
+    """按路径脚本化返回的 httpx.AsyncClient 替身，并记录全部请求。"""
+
+    def __init__(self, handler):
+        self._handler = handler
+        self.calls: list[tuple[str, dict]] = []
+
+    async def __aenter__(self) -> "_FakeClient":
+        return self
+
+    async def __aexit__(self, *exc_info) -> bool:
+        return False
+
+    async def post(self, path: str, json: dict | None = None) -> _FakeResponse:
+        self.calls.append((path, json or {}))
+        return self._handler(path)
+
+
+def _install_fake_client(monkeypatch, handler) -> _FakeClient:
+    client = _FakeClient(handler)
+    monkeypatch.setattr(
+        "training_plan_collector.sync_worker.httpx.AsyncClient", lambda **kwargs: client
+    )
+    return client
+
+
+def _handshake_handler(on_running=None):
+    """会话握手成功，其余端点按需定制。"""
+
+    def handler(path: str) -> _FakeResponse:
+        if path.endswith("/session"):
+            return _FakeResponse({"tokenJson": "{}", "region": "GLOBAL"})
+        if path.endswith("/running") and on_running is not None:
+            return on_running()
+        return _FakeResponse({})
+
+    return handler
+
+
+async def test_http_error_reports_failure_instead_of_leaving_job_running(monkeypatch):
+    """平台内部接口报错时也要上报失败。
+
+    否则任务会一直停在 RUNNING，直到平台的僵死清理器在 60 分钟后才收敛成
+    「超时」，看板上看到的是超时而不是真实原因。
+    """
+
+    def on_running():
+        raise httpx.ConnectError("platform dropped the connection")
+
+    client = _install_fake_client(monkeypatch, _handshake_handler(on_running))
+
+    await build_worker()._handle({"jobId": 9, "region": "GLOBAL"})
+
+    fail_payload = dict(client.calls).get("/internal/collector/jobs/9/fail")
+    assert fail_payload is not None, "HTTP 异常必须上报失败，否则任务会一直停在 RUNNING"
+    assert fail_payload["errorCode"] == "SYSTEM_ERROR"
+    assert "/internal/collector/jobs/9/complete" not in dict(client.calls)
+
+
+async def test_successful_job_reports_complete_and_never_fails(monkeypatch):
+    """正常路径只上报 complete，不得同时上报 fail。"""
+
+    client = _install_fake_client(monkeypatch, _handshake_handler())
+    worker = build_worker()
+
+    class _Auth:
+        def restore_session(self, token_json, region):
+            return SessionOutcome(status="CONNECTED", client=object())
+
+    worker._auth = _Auth()
+    worker._collect = lambda adapter, start, end, region: {
+        "dailyHealth": [],
+        "sleep": [],
+        "hrv": [],
+        "activities": [],
+    }
+
+    await worker._handle({"jobId": 11, "region": "GLOBAL"})
+
+    paths = [path for path, _ in client.calls]
+    assert "/internal/collector/jobs/11/complete" in paths
+    assert "/internal/collector/jobs/11/fail" not in paths
+
+
+async def test_business_error_code_aborts_job_instead_of_reporting_success(monkeypatch):
+    """平台用 HTTP 200 + 业务码表示失败时，采集器不能当成执行成功。
+
+    「任务已被判超时作废」就是这个形态：只 raise_for_status() 会一路走下去，
+    继续拉数、继续回传，日志里还打出 sync_job_succeeded。
+    """
+
+    def handler(path: str) -> _FakeResponse:
+        if path.endswith("/running"):
+            return _FakeResponse(code=40400, status_code=200)
+        if path.endswith("/session"):
+            return _FakeResponse({"tokenJson": "{}", "region": "GLOBAL"})
+        return _FakeResponse({})
+
+    client = _install_fake_client(monkeypatch, handler)
+
+    class _RecordingAuth:
+        """记录是否真的去连了 Garmin；被拒绝的任务不该走到这一步。"""
+
+        def __init__(self) -> None:
+            self.called = False
+
+        def restore_session(self, token_json, region):
+            self.called = True
+            raise AssertionError("平台已拒绝该任务，不应继续恢复 Garmin 会话")
+
+    worker = build_worker()
+    worker._auth = _RecordingAuth()
+
+    await worker._handle({"jobId": 21, "region": "GLOBAL"})
+
+    # 关键断言：拿到业务失败码后立刻停手，而不是继续去连 Garmin
+    assert worker._auth.called is False
+    paths = [path for path, _ in client.calls]
+    assert "/internal/collector/jobs/21/fail" in paths
+    assert "/internal/collector/jobs/21/ingest" not in paths
+    assert "/internal/collector/jobs/21/complete" not in paths

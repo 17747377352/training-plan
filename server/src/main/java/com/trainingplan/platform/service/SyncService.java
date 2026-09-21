@@ -1,6 +1,10 @@
 package com.trainingplan.platform.service;
 
+import com.trainingplan.platform.common.api.PageResult;
 import com.trainingplan.platform.dto.sync.SyncIngestRequest;
+import com.trainingplan.platform.dto.sync.SyncJobDto;
+import com.trainingplan.platform.dto.sync.SyncJobQuery;
+import com.trainingplan.platform.dto.sync.SyncOverviewDto;
 
 /**
  * Garmin 数据同步服务。
@@ -94,4 +98,33 @@ public interface SyncService {
      * @return 本次收敛的任务数
      */
     int failStaleJobs();
+
+    /**
+     * 分页查询当前用户的同步任务。
+     *
+     * <p>数据范围先由平台用户解析出 Garmin 账号，再限定在账号内；
+     * 请求参数只用于在自有账号范围内收窄，不能查出别人的任务。</p>
+     *
+     * @param userId 当前登录用户 ID
+     * @param query  过滤与分页条件
+     * @return 任务分页
+     */
+    PageResult<SyncJobDto> listJobs(Long userId, SyncJobQuery query);
+
+    /**
+     * 同步任务看板汇总：最近成功/失败时间、进行中任务数与失败原因。
+     *
+     * @param userId 当前登录用户 ID
+     * @return 汇总信息
+     */
+    SyncOverviewDto overview(Long userId);
+
+    /**
+     * 按原任务的数据区间重跑一次同步。
+     *
+     * @param userId 当前登录用户 ID
+     * @param jobId  被重试的任务 ID，必须属于当前用户
+     * @return 新任务 ID
+     */
+    Long retryJob(Long userId, Long jobId);
 }

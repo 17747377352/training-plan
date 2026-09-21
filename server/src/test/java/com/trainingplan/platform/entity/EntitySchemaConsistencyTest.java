@@ -41,8 +41,18 @@ class EntitySchemaConsistencyTest {
 
     private static final Pattern CREATE_TABLE =
             Pattern.compile("CREATE TABLE (\\w+)\\s*\\((.*?)\\n\\)\\s*ENGINE", Pattern.DOTALL);
-    private static final Pattern ALTER_ADD_COLUMN =
-            Pattern.compile("ALTER TABLE (\\w+)\\s+ADD COLUMN (\\w+)", Pattern.CASE_INSENSITIVE);
+    /**
+     * ALTER TABLE 语句本体（到分号为止）。
+     *
+     * <p>不能直接写 {@code ALTER TABLE (\w+)\s+ADD COLUMN (\w+)}：一条 ALTER 里
+     * 可以并列多个 ADD COLUMN，那样只会匹配到第一个，后面的列会被漏掉，
+     * 实体改了列名也照样通过。</p>
+     */
+    private static final Pattern ALTER_TABLE =
+            Pattern.compile("ALTER TABLE (\\w+)([^;]*);", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern ADD_COLUMN =
+            Pattern.compile("ADD COLUMN (\\w+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern LINE_COMMENT = Pattern.compile("--[^\\n]*");
     private static final Pattern COLUMN_LINE = Pattern.compile("^(\\w+)\\s+[A-Za-z]");
     private static final Set<String> NON_COLUMN_PREFIXES =
             Set.of("PRIMARY", "UNIQUE", "KEY", "CONSTRAINT", "INDEX", "FOREIGN");
@@ -107,7 +117,8 @@ class EntitySchemaConsistencyTest {
                     .sorted()
                     .toList();
             for (Path file : sqlFiles) {
-                String sql = Files.readString(file);
+                // 先去掉行注释，避免注释里提到的列名被当成真实列
+                String sql = LINE_COMMENT.matcher(Files.readString(file)).replaceAll("");
                 Matcher create = CREATE_TABLE.matcher(sql);
                 while (create.find()) {
                     Set<String> columns = schema.computeIfAbsent(create.group(1), key -> new HashSet<>());
@@ -123,9 +134,14 @@ class EntitySchemaConsistencyTest {
                         }
                     }
                 }
-                Matcher alter = ALTER_ADD_COLUMN.matcher(sql);
+                Matcher alter = ALTER_TABLE.matcher(sql);
                 while (alter.find()) {
-                    schema.computeIfAbsent(alter.group(1), key -> new HashSet<>()).add(alter.group(2));
+                    Set<String> columns =
+                            schema.computeIfAbsent(alter.group(1), key -> new HashSet<>());
+                    Matcher added = ADD_COLUMN.matcher(alter.group(2));
+                    while (added.find()) {
+                        columns.add(added.group(1));
+                    }
                 }
             }
         }

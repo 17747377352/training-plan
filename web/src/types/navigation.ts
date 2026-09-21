@@ -3,6 +3,7 @@ export type NavIconName =
   | "trends"
   | "activities"
   | "garmin"
+  | "sync"
   | "export"
   | "settings"
   | "admin";

@@ -36,6 +36,7 @@ const menuGroups: MenuGroup[] = [
     label: "数据管理",
     items: [
       { path: "/garmin", label: "Garmin 账号", icon: "garmin" },
+      { path: "/sync-jobs", label: "同步任务", icon: "sync" },
       { path: "/export", label: "数据导出", icon: "export" },
     ],
   },

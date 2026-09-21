@@ -1516,3 +1516,168 @@ body {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
+
+/* 同步任务看板 */
+.sync-hint,
+.sync-feedback,
+.sync-load-error {
+  margin-bottom: 14px;
+}
+
+.sync-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.sync-summary-card .el-card__body {
+  padding: 16px 18px;
+}
+
+.sync-summary-label {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: #8792a1;
+}
+
+.sync-summary-value {
+  margin: 6px 0 4px;
+  font-size: 20px;
+  font-weight: 600;
+  color: #223047;
+}
+
+.sync-summary-meta {
+  margin: 0;
+  font-size: 12px;
+  color: #8792a1;
+}
+
+.sync-account-card,
+.sync-filter-card {
+  margin-bottom: 16px;
+}
+
+.sync-section-title {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #223047;
+}
+
+.sync-account-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 12px;
+}
+
+.sync-account-list > li {
+  border: 1px solid #e6ecef;
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.sync-account-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sync-account-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 10px 0 0;
+}
+
+.sync-account-meta dt {
+  font-size: 12px;
+  color: #8792a1;
+}
+
+.sync-account-meta dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: #223047;
+  word-break: break-all;
+}
+
+.sync-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.sync-status-select,
+.sync-type-select {
+  width: 150px;
+}
+
+.sync-result-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 20px 2px 12px;
+}
+
+.sync-result-bar > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.sync-result-bar strong {
+  color: #223047;
+  font-size: 17px;
+}
+
+.sync-result-bar span {
+  color: #8792a1;
+  font-size: 12px;
+}
+
+.sync-table-shell {
+  min-height: 200px;
+}
+
+.sync-job-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sync-job-cell span {
+  font-size: 12px;
+  color: #8792a1;
+}
+
+.sync-retry-of {
+  color: #147662 !important;
+}
+
+.sync-failure-text {
+  color: #c45656;
+}
+
+.sync-no-action {
+  color: #8792a1;
+}
+
+.sync-pagination {
+  margin-top: 14px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .sync-status-select,
+  .sync-type-select {
+    width: 100%;
+  }
+}
