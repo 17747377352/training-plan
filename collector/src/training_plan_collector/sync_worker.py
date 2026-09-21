@@ -285,12 +285,23 @@ class SyncWorker:
 
     @staticmethod
     def _sleep_row(raw: dict[str, Any], day: str) -> dict[str, Any] | None:
+        """把 Garmin 的睡眠响应转换为平台字段。
+
+        字段名依据 2026-09-21 对真实响应的实地核对。**不要照抄
+        ``garminconnect`` 的 typed 模型**：它的 ``SleepData`` 声明了
+        ``avgSleepHRV`` / ``avgSpO2``，但那是照着 ``tests/test_typed.py`` 里
+        手写的 fixture（``userProfilePK: 12345``）写的，真实响应里这两个键
+        从来不存在。真实键名是 ``averageSpO2Value`` 与顶层的 ``avgOvernightHrv``，
+        按库的模型取会让血氧与睡眠 HRV 静默全空。
+        """
+
         dto = raw.get("dailySleepDTO") or {}
         start = dto.get("sleepStartTimestampGMT")
         if start is None:
             return None
         scores = dto.get("sleepScores") or {}
         overall = (scores.get("overall") or {}).get("value")
+        spo2_summary = raw.get("wellnessSpO2SleepSummaryDTO") or {}
         return {
             "calendarDate": dto.get("calendarDate") or day,
             "sleepStartGmt": _gmt_to_iso(start),
@@ -301,8 +312,10 @@ class SyncWorker:
             "remSleepSeconds": dto.get("remSleepSeconds"),
             "awakeSleepSeconds": dto.get("awakeSleepSeconds"),
             "sleepScore": overall,
-            "avgSleepHrv": dto.get("avgSleepHRV"),
-            "avgSpo2": dto.get("avgSpO2"),
+            # 夜间 HRV 在响应的顶层，不在 dailySleepDTO 里
+            "avgSleepHrv": raw.get("avgOvernightHrv"),
+            # 血氧优先取 dailySleepDTO，缺失时退回 wellnessSpO2SleepSummaryDTO
+            "avgSpo2": dto.get("averageSpO2Value") or spo2_summary.get("averageSPO2"),
             "avgRespiration": dto.get("averageRespirationValue"),
         }
 

@@ -47,22 +47,33 @@ def test_gmt_millis_to_iso():
     assert _gmt_to_iso("x") is None
 
 
-def test_sleep_row_maps_typed_fields():
+def test_sleep_row_maps_real_response_keys():
+    """字段名依据 2026-09-21 实拉的真实睡眠响应，不是库里的 fixture。
+
+    ``garminconnect`` 的 SleepData 声明了 avgSleepHRV / avgSpO2，但那是照着
+    tests/test_typed.py 里手写的 fixture 写的，真实响应里没有这两个键。
+    照库的模型取会让血氧与睡眠 HRV 静默全空——这正是线上发生过的事。
+    """
+
     raw = {
         "dailySleepDTO": {
             "calendarDate": "2026-09-20",
-            "sleepStartTimestampGMT": 1758330000000,
-            "sleepEndTimestampGMT": 1758355200000,
+            "sleepStartTimestampGMT": 1789836851000,
+            "sleepEndTimestampGMT": 1789863731000,
             "sleepTimeSeconds": 26460,
             "deepSleepSeconds": 6720,
-            "lightSleepSeconds": 15000,
+            "lightSleepSeconds": 16740,
             "remSleepSeconds": 3000,
-            "awakeSleepSeconds": 600,
-            "avgSleepHRV": 52.3,
-            "avgSpO2": 96.0,
+            "awakeSleepSeconds": 420,
+            "averageSpO2Value": 94.0,
+            "lowestSpO2Value": 83,
+            "highestSpO2Value": 100,
             "averageRespirationValue": 14.2,
             "sleepScores": {"overall": {"value": 80, "qualifierKey": "GOOD"}},
-        }
+        },
+        "wellnessSpO2SleepSummaryDTO": {"averageSPO2": 94.0, "lowestSPO2": 83},
+        "avgOvernightHrv": 70.0,
+        "hrvStatus": "UNBALANCED",
     }
     row = build_worker()._sleep_row(raw, "2026-09-20")
 
@@ -70,8 +81,27 @@ def test_sleep_row_maps_typed_fields():
     assert row["calendarDate"] == "2026-09-20"
     assert row["sleepTimeSeconds"] == 26460
     assert row["sleepScore"] == 80
-    assert row["avgSleepHrv"] == 52.3
-    assert row["sleepStartGmt"].startswith("2025-") or row["sleepStartGmt"].startswith("2026-")
+    # 夜间 HRV 在响应顶层，不在 dailySleepDTO 里
+    assert row["avgSleepHrv"] == 70.0
+    assert row["avgSpo2"] == 94.0
+    assert row["avgRespiration"] == 14.2
+    assert row["sleepStartGmt"].startswith("2026-")
+
+
+def test_sleep_row_falls_back_to_spo2_summary_block():
+    """dailySleepDTO 里没有血氧时，退回 wellnessSpO2SleepSummaryDTO。"""
+
+    raw = {
+        "dailySleepDTO": {"sleepStartTimestampGMT": 1789836851000},
+        "wellnessSpO2SleepSummaryDTO": {"averageSPO2": 91.0},
+    }
+
+    row = build_worker()._sleep_row(raw, "2026-09-20")
+
+    assert row is not None
+    assert row["avgSpo2"] == 91.0
+    # 顶层没有 HRV 时如实为空，不要瞎猜
+    assert row["avgSleepHrv"] is None
 
 
 def test_sleep_row_skipped_without_start_timestamp():
