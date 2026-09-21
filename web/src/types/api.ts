@@ -239,3 +239,52 @@ export interface SyncOverview {
   hasGarminAccount: boolean;
   accounts: AccountSyncState[];
 }
+
+export interface TrainingLoad {
+  calendarDate: string;
+  trainingStatusPhrase?: string | null;
+  acwrPercent?: number | null;
+  acwrStatus?: string | null;
+  acwrRatio?: number | null;
+  acuteLoad?: number | null;
+  chronicLoad?: number | null;
+  chronicLoadMin?: number | null;
+  chronicLoadMax?: number | null;
+  loadAerobicLow?: number | null;
+  loadAerobicLowTargetMin?: number | null;
+  loadAerobicLowTargetMax?: number | null;
+  loadAerobicHigh?: number | null;
+  loadAerobicHighTargetMin?: number | null;
+  loadAerobicHighTargetMax?: number | null;
+  loadAnaerobic?: number | null;
+  loadAnaerobicTargetMin?: number | null;
+  loadAnaerobicTargetMax?: number | null;
+  balanceFeedbackPhrase?: string | null;
+  vo2maxValue?: number | null;
+  fitnessAge?: number | null;
+}
+
+export interface FtpRecord {
+  effectiveDate: string;
+  ftpWatts: number;
+  source: string;
+}
+
+export interface DailyCheckin {
+  calendarDate: string;
+  weightKg?: number | null;
+  rpe?: number | null;
+  note?: string | null;
+}
+
+export interface CheckinForm {
+  weightKg?: number | null;
+  rpe?: number | null;
+  note?: string | null;
+}
+
+export interface ActivityHrZone {
+  zoneNumber: number;
+  zoneLowBoundary?: number | null;
+  secondsInZone: number;
+}

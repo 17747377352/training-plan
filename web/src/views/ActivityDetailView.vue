@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { getActivity } from "../api/activities";
+import { getActivity, listActivityHrZones } from "../api/activities";
 import PageHeading from "../components/PageHeading.vue";
-import type { ActivityDetail } from "../types/api";
+import type { ActivityDetail, ActivityHrZone } from "../types/api";
 
 interface DetailField {
   key: keyof ActivityDetail;
@@ -112,6 +112,26 @@ const powerZones = computed(() => {
 const powerZoneTotal = computed(() =>
   powerZones.value.reduce((total, zone) => total + (zone.seconds ?? 0), 0),
 );
+
+/**
+ * 心率区间来自单独的活动接口（功率区间是活动列表里白拿的，心率不是）。
+ * 取不到就整体不显示，而不是留一块空表。
+ */
+const hrZones = ref<ActivityHrZone[]>([]);
+
+const hrZoneTotal = computed(() =>
+  hrZones.value.reduce((total, zone) => total + (zone.secondsInZone ?? 0), 0),
+);
+
+function hrZoneWidth(seconds?: number | null): string {
+  if (!seconds || hrZoneTotal.value <= 0) return "0%";
+  return `${Math.max(2, (seconds / hrZoneTotal.value) * 100)}%`;
+}
+
+function hrZoneShare(seconds?: number | null): string {
+  if (!seconds || hrZoneTotal.value <= 0) return "--";
+  return `${((seconds / hrZoneTotal.value) * 100).toFixed(1)}%`;
+}
 
 const detailSections = computed<DetailSection[]>(() => {
   const value = activity.value;
@@ -396,6 +416,13 @@ async function loadActivity(): Promise<void> {
   } finally {
     loading.value = false;
   }
+
+  // 心率区间是附加信息，取不到不影响活动详情本身
+  try {
+    hrZones.value = await listActivityHrZones(activityId);
+  } catch {
+    hrZones.value = [];
+  }
 }
 
 function goBack(): void {
@@ -510,6 +537,34 @@ watch(() => route.params.id, loadActivity, { immediate: true });
               </div>
               <strong>{{ formatDuration(zone.seconds) }}</strong>
               <code>{{ zone.key }}</code>
+            </div>
+          </div>
+        </section>
+
+        <section v-if="hrZones.length > 0" class="activity-detail-card power-zone-card">
+          <header class="detail-card-heading">
+            <div>
+              <h2>心率区间</h2>
+              <p>各区间停留时长与占比，与功率区间互为印证。</p>
+            </div>
+            <strong>{{ formatDuration(hrZoneTotal) }}</strong>
+          </header>
+          <div class="power-zone-list">
+            <div
+              v-for="zone in hrZones"
+              :key="zone.zoneNumber"
+              class="power-zone-row"
+            >
+              <span class="power-zone-label">H{{ zone.zoneNumber }}</span>
+              <div class="power-zone-track">
+                <span
+                  class="power-zone-fill"
+                  :class="`zone-${zone.zoneNumber}`"
+                  :style="{ width: hrZoneWidth(zone.secondsInZone) }"
+                ></span>
+              </div>
+              <strong>{{ formatDuration(zone.secondsInZone) }}</strong>
+              <code>≥{{ zone.zoneLowBoundary ?? "--" }} bpm · {{ hrZoneShare(zone.secondsInZone) }}</code>
             </div>
           </div>
         </section>

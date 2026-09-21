@@ -29,6 +29,7 @@ const menuGroups: MenuGroup[] = [
     items: [
       { path: "/", label: "概览", icon: "overview" },
       { path: "/trends", label: "趋势", icon: "trends" },
+      { path: "/training-load", label: "训练负荷", icon: "load" },
       { path: "/activities", label: "活动", icon: "activities" },
     ],
   },

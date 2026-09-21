@@ -1,5 +1,6 @@
 import type {
   ActivityDetail,
+  ActivityHrZone,
   ActivityQuery,
   ActivitySummary,
   PageResult,
@@ -22,4 +23,9 @@ export function listActivityTypes(): Promise<string[]> {
 
 export function getActivity(id: number): Promise<ActivityDetail> {
   return request({ method: "GET", url: `/api/activities/${id}` });
+}
+
+/** 某次活动的心率区间分布。 */
+export function listActivityHrZones(id: number): Promise<ActivityHrZone[]> {
+  return request({ method: "GET", url: `/api/activities/${id}/hr-zones` });
 }

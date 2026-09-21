@@ -1,6 +1,6 @@
 """同步工人的数据归一化与任务编排测试。"""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import httpx
 
@@ -609,3 +609,27 @@ def test_collect_uses_hrv_range_endpoint_and_returns_all_payload_keys():
         "dailyHealth", "sleep", "hrv", "activities",
         "trainingStatus", "ftpHistory", "activityHrZones",
     }
+
+
+def test_ftp_rows_requests_bounded_window():
+    """FTP 历史区间上限约一年，请求过宽会被 400 拒绝并静默退化成单条。"""
+
+    seen: dict[str, str] = {}
+
+    class _Client:
+        def get_functional_threshold_power_range(self, start, end, sport=None):
+            seen["start"] = start
+            seen["end"] = end
+            return [{"from": "2026-08-22", "value": 216.0}]
+
+        def get_cycling_ftp(self):
+            raise AssertionError("有历史时不该退回当前值")
+
+    class _Adapter:
+        client = _Client()
+
+    rows = build_worker()._ftp_rows(_Adapter())
+
+    span = (date.fromisoformat(seen["end"]) - date.fromisoformat(seen["start"])).days
+    assert span <= 366, f"FTP 历史窗口 {span} 天会被 Garmin 拒绝"
+    assert rows == [{"effectiveDate": "2026-08-22", "ftpWatts": 216}]

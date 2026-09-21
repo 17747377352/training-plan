@@ -35,6 +35,9 @@ ACTIVITY_TYPE_CYCLING = "cycling"
 
 SUCCESS_CODE = 200
 
+# FTP 历史接口的区间上限约一年，超过会被 Garmin 以 400 拒绝。
+FTP_HISTORY_DAYS = 365
+
 
 class CollectorApiError(Exception):
     """平台内部接口返回了非成功业务码。
@@ -270,11 +273,19 @@ class SyncWorker:
 
     @staticmethod
     def _ftp_rows(adapter: GarminReadAdapter) -> list[dict[str, Any]]:
-        """取骑行 FTP 历史；没有历史接口时退回当前值。"""
+        """取骑行 FTP 历史；没有历史接口时退回当前值。
 
+        区间上限约一年：实测 start 早于一年前会被 Garmin 以 400 拒绝
+        （"End date is before start date or maximum range"）。而 _safe 会把异常
+        吞掉，于是静默退化成「只有当前值一条」——看起来像正常结果。因此这里
+        显式限定一年窗口，并有用例锁住这个边界。
+        """
+
+        end = date.today()
+        start = end - timedelta(days=FTP_HISTORY_DAYS)
         history = SyncWorker._safe(
             lambda: adapter.client.get_functional_threshold_power_range(
-                "2000-01-01", date.today().isoformat(), sport="CYCLING"
+                start.isoformat(), end.isoformat(), sport="CYCLING"
             )
         )
         rows: dict[str, dict[str, Any]] = {}

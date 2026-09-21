@@ -1681,3 +1681,176 @@ body {
     width: 100%;
   }
 }
+
+/* 训练负荷页 */
+.load-error {
+  margin-bottom: 14px;
+}
+
+.load-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.load-summary-card .el-card__body {
+  padding: 16px 18px;
+}
+
+.load-summary-label {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: #8792a1;
+}
+
+.load-summary-value {
+  margin: 6px 0 4px;
+  font-size: 20px;
+  font-weight: 600;
+  color: #223047;
+}
+
+.load-summary-meta {
+  margin: 0;
+  font-size: 12px;
+  color: #8792a1;
+}
+
+.load-section-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #223047;
+}
+
+.balance-card,
+.load-chart-card,
+.checkin-card {
+  margin-bottom: 16px;
+}
+
+.balance-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.balance-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 12px;
+}
+
+.balance-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.balance-row-head strong {
+  color: #223047;
+}
+
+.balance-row-head span {
+  color: #8792a1;
+  font-size: 12px;
+}
+
+.balance-bar {
+  margin-top: 6px;
+  height: 8px;
+  border-radius: 5px;
+  background: #eef2f4;
+  overflow: hidden;
+}
+
+.balance-bar-fill {
+  height: 100%;
+  border-radius: 5px;
+  background: #2ca58d;
+}
+
+.balance-low .balance-bar-fill {
+  background: #d9a441;
+}
+
+.balance-high .balance-bar-fill {
+  background: #c45656;
+}
+
+.balance-hint {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #8792a1;
+}
+
+.load-chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.load-period-select {
+  width: 130px;
+}
+
+.load-chart {
+  height: 320px;
+}
+
+.checkin-hint {
+  margin: 6px 0 14px;
+  font-size: 12px;
+  color: #8792a1;
+}
+
+.checkin-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.checkin-date {
+  width: 160px;
+}
+
+.checkin-weight {
+  width: 150px;
+}
+
+.checkin-rpe {
+  width: 130px;
+}
+
+.checkin-note {
+  flex: 1 1 240px;
+  min-width: 200px;
+}
+
+.checkin-feedback {
+  margin-top: 14px;
+}
+
+.checkin-table {
+  margin-top: 16px;
+}
+
+@media (max-width: 720px) {
+  .checkin-date,
+  .checkin-weight,
+  .checkin-rpe {
+    width: 100%;
+  }
+}
