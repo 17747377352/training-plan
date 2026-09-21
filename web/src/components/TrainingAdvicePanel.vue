@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { listCheckins, saveCheckin } from "../api/checkins";
 import {
   getTrainingAdvice,
   getStoredTrainingPlan,
@@ -8,10 +9,12 @@ import {
   type AdviceLight,
   type TrainingAdvice,
 } from "../api/advice";
+import type { DailyCheckin } from "../types/api";
 
 const props = withDefaults(defineProps<{ revision?: number }>(), {
   revision: 0,
 });
+const emit = defineEmits<{ "checkin-saved": [] }>();
 const advice = ref<TrainingAdvice | null>(null);
 const loading = ref(true);
 const failed = ref(false);
@@ -20,6 +23,60 @@ const generating = ref(false);
 const generationError = ref("");
 /** 已保存的计划是否基于与当前不同的灯色生成，用于提示重新生成。 */
 const storedLightMismatch = ref(false);
+/** 当天打卡，用于一键记录 RPE；替换语义要求提交时必须带上已有字段。 */
+const todayCheckin = ref<DailyCheckin | null>(null);
+const savingRpe = ref(false);
+const quickError = ref("");
+
+/**
+ * 一键体感。四个选项各自对应一个引擎结论，点下去立刻能看到灯色或处方变化：
+ * RPE ≤6 不影响判灯、7–8 黄灯减量、≥9 红灯休息。
+ *
+ * 说明：主观疲劳对判灯是**不对称**的——感觉差会下调安排，感觉好并不会解锁更长
+ * 的处方（60 分钟那档还要求 Garmin 诊断为低强度有氧不足且四项依据齐全，实测
+ * 200 天里这两件事从未同时成立）。这里如实呈现，不拿「填了就给 60 分钟」当诱因。
+ */
+const RPE_PRESETS = [
+  { value: 3, label: "轻松", hint: "精力充足" },
+  { value: 5, label: "正常", hint: "一般状态" },
+  { value: 7, label: "有点累", hint: "需要减量" },
+  { value: 9, label: "很累", hint: "优先休息" },
+] as const;
+
+async function loadTodayCheckin(day: string): Promise<void> {
+  try {
+    const rows = await listCheckins({ startDate: day, endDate: day });
+    todayCheckin.value = rows[0] ?? null;
+  } catch {
+    todayCheckin.value = null;
+  }
+}
+
+/** 当天已填的 RPE，没有则 null。 */
+const todayRpe = computed(() => todayCheckin.value?.rpe ?? null);
+
+async function setRpe(value: number): Promise<void> {
+  // 用后端给的日期，避免浏览器时区与服务端 Asia/Shanghai 不一致
+  const day = advice.value?.calendarDate;
+  if (!day || savingRpe.value) return;
+  savingRpe.value = true;
+  quickError.value = "";
+  try {
+    // 打卡接口是替换语义：不带上已填的体重与备注会把它们清空
+    await saveCheckin(day, {
+      weightKg: todayCheckin.value?.weightKg ?? null,
+      rpe: value,
+      note: todayCheckin.value?.note ?? null,
+    });
+    await refresh();
+    emit("checkin-saved");
+  } catch (error) {
+    quickError.value =
+      error instanceof Error ? error.message : "打卡失败，请重试";
+  } finally {
+    savingRpe.value = false;
+  }
+}
 const prescription = computed(
   () => generated.value?.prescription ?? advice.value?.prescription,
 );
@@ -50,6 +107,7 @@ async function refresh() {
     ]);
     if (id !== requestId) return;
     advice.value = result;
+    await loadTodayCheckin(result.calendarDate);
     if (stored && stored.calendarDate === result.calendarDate) {
       generated.value = stored;
       // 灯色变了说明恢复状态已不同，旧计划要标注出来而不是假装仍适用
@@ -251,6 +309,33 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+      <div class="quick-rpe">
+        <div class="quick-rpe-head">
+          <strong>今天感觉如何？</strong>
+          <span v-if="todayRpe != null">
+            已记录 RPE {{ todayRpe }} · 点其他选项可改
+          </span>
+          <span v-else>
+            主观感受是客观指标看不到的那一面：感觉差时它会下调今天的安排，
+            也是判定依据里唯一由你提供的维度
+          </span>
+        </div>
+        <div class="quick-rpe-options">
+          <button
+            v-for="preset in RPE_PRESETS"
+            :key="preset.value"
+            type="button"
+            class="quick-rpe-option"
+            :class="{ active: todayRpe === preset.value }"
+            :disabled="savingRpe"
+            @click="setRpe(preset.value)"
+          >
+            <span class="quick-rpe-label">{{ preset.label }}</span>
+            <span class="quick-rpe-hint">{{ preset.hint }} · RPE {{ preset.value }}</span>
+          </button>
+        </div>
+        <p v-if="quickError" class="quick-rpe-error">{{ quickError }}</p>
+      </div>
       <div v-if="advice.actions.length" class="advice-actions">
         <strong>补齐这些信息，建议会更明确</strong>
         <ul>
@@ -263,9 +348,9 @@ onBeforeUnmount(() => {
       <details class="advice-method">
         <summary>判断规则与数据来源</summary>
         <p>
-          任一红色恢复信号或至少两个黄色恢复信号 →
-          红灯；一个黄色信号或任一恢复依据缺失 → 黄灯；四项恢复信号均正常 →
-          绿灯。缺数据本身不判红灯，全部缺失时先补齐状态。
+          任一红色恢复信号或至少两个黄色恢复信号 → 红灯；有黄色信号，或可用恢复
+          依据不足三项 → 黄灯；可用依据达到三项且无异常 → 绿灯。缺一项但无异常时
+          仍给绿灯，但处方收紧（45 分钟而非 60 分钟）。低负荷不自动要求补强度。
         </p>
         <p>{{ advice.sourceDescription }}。主观疲劳与体重取自你的手工打卡。</p>
         <p>

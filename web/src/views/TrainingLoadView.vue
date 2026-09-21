@@ -449,7 +449,10 @@ onBeforeUnmount(() => {
       </template>
     </PageHeading>
 
-    <TrainingAdvicePanel :revision="adviceRevision" />
+    <TrainingAdvicePanel
+      :revision="adviceRevision"
+      @checkin-saved="loadAll"
+    />
 
     <el-alert
       v-if="loadFailed"
