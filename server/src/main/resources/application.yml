@@ -33,6 +33,12 @@ management:
       show-details: never
 
 app:
+  deepseek:
+    base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+    api-key: ${DEEPSEEK_API_KEY:}
+    model: ${DEEPSEEK_MODEL:deepseek-flash}
+    # 前端生成请求超时 120 秒，应大于这里的读取超时。
+    timeout: 90s
   sync:
     # 同步任务队列，需与 collector 的 COLLECTOR_TASK_QUEUE 一致
     task-queue: ${SYNC_TASK_QUEUE:training-plan:sync:jobs}

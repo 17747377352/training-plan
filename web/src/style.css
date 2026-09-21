@@ -1854,3 +1854,8 @@ body {
     width: 100%;
   }
 }
+
+/* 已保存计划的过期提示 */
+.generation-stale {
+  margin-top: 12px;
+}

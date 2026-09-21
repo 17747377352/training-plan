@@ -14,6 +14,11 @@ spring:
       database: 5
 
 app:
+  deepseek:
+    # 也可设置 DEEPSEEK_API_KEY 环境变量，真实密钥只放本地忽略配置。
+    api-key: ${DEEPSEEK_API_KEY:}
+    base-url: https://api.deepseek.com
+    model: deepseek-flash
   security:
     jwt-secret: 请替换为至少32个字符的随机密钥
     # 生成方式：openssl rand -base64 32

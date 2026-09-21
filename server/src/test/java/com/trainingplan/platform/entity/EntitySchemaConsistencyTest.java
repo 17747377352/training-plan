@@ -38,7 +38,8 @@ class EntitySchemaConsistencyTest {
     private static final List<Class<?>> ENTITIES = List.of(
             SysUser.class, SysRole.class, SysUserRole.class, GarminAccount.class,
             SyncJob.class, DailyHealth.class, SleepRecord.class, HrvRecord.class, Activity.class,
-            TrainingStatus.class, FtpHistory.class, ActivityHrZone.class, DailyCheckin.class);
+            TrainingStatus.class, FtpHistory.class, ActivityHrZone.class, DailyCheckin.class,
+            TrainingPlan.class);
 
     private static final Pattern CREATE_TABLE =
             Pattern.compile("CREATE TABLE (\\w+)\\s*\\((.*?)\\n\\)\\s*ENGINE", Pattern.DOTALL);

@@ -10,10 +10,19 @@ import {
 import { init, use, type ECharts, type EChartsCoreOption } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import { ElDatePicker, ElInputNumber, ElPopconfirm } from "element-plus";
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
+} from "vue";
 import { deleteCheckin, listCheckins, saveCheckin } from "../api/checkins";
 import { listFtp, listTrainingLoad } from "../api/training";
 import PageHeading from "../components/PageHeading.vue";
+import TrainingAdvicePanel from "../components/TrainingAdvicePanel.vue";
 import type { DailyCheckin, FtpRecord, TrainingLoad } from "../types/api";
 
 use([
@@ -84,6 +93,7 @@ const loadRows = ref<TrainingLoad[]>([]);
 const ftpRows = ref<FtpRecord[]>([]);
 const checkins = ref<DailyCheckin[]>([]);
 const saving = ref(false);
+const adviceRevision = ref(0);
 const feedback = ref<{ type: "success" | "error"; text: string } | null>(null);
 
 const checkinForm = reactive<{
@@ -150,7 +160,9 @@ function acwrLabel(status?: string | null): string {
   return ACWR_LABELS[status] ?? status;
 }
 
-function acwrTagType(status?: string | null): "success" | "warning" | "danger" | "info" {
+function acwrTagType(
+  status?: string | null,
+): "success" | "warning" | "danger" | "info" {
   if (status === "OPTIMAL") return "success";
   if (status === "HIGH" || status === "LOW") return "warning";
   if (status === "VERY_HIGH" || status === "VERY_LOW") return "danger";
@@ -172,7 +184,13 @@ const balanceRows = computed<BalanceRow[]>(() => {
       else if (actual > max) level = "high";
       else level = "ok";
     }
-    return { label, actual: actual ?? null, min: min ?? null, max: max ?? null, level };
+    return {
+      label,
+      actual: actual ?? null,
+      min: min ?? null,
+      max: max ?? null,
+      level,
+    };
   };
   return [
     build(
@@ -362,9 +380,12 @@ async function submitCheckin(): Promise<void> {
       rpe: checkinForm.rpe,
       note: checkinForm.note.trim() || null,
     });
-    feedback.value = { type: "success", text: `${checkinForm.calendarDate} 已保存` };
-    checkinForm.note = "";
+    feedback.value = {
+      type: "success",
+      text: `${checkinForm.calendarDate} 已保存`,
+    };
     await loadAll();
+    adviceRevision.value++;
   } catch (error) {
     feedback.value = {
       type: "error",
@@ -381,12 +402,25 @@ async function removeCheckin(calendarDate: string): Promise<void> {
     await deleteCheckin(calendarDate);
     feedback.value = { type: "success", text: `${calendarDate} 已删除` };
     await loadAll();
+    adviceRevision.value++;
   } catch {
     feedback.value = { type: "error", text: "删除失败" };
   }
 }
 
-const recentCheckins = computed(() => [...checkins.value].reverse().slice(0, 10));
+const recentCheckins = computed(() =>
+  [...checkins.value].reverse().slice(0, 10),
+);
+
+// PUT 是整条替换：切换日期时回填当天记录，避免把昨天的疲劳误写到今天。
+watch([() => checkinForm.calendarDate, checkins], () => {
+  const row = checkins.value.find(
+    (item) => item.calendarDate === checkinForm.calendarDate,
+  );
+  checkinForm.weightKg = row?.weightKg ?? null;
+  checkinForm.rpe = row?.rpe ?? null;
+  checkinForm.note = row?.note ?? "";
+});
 
 watch(period, () => {
   void loadAll();
@@ -415,6 +449,8 @@ onBeforeUnmount(() => {
       </template>
     </PageHeading>
 
+    <TrainingAdvicePanel :revision="adviceRevision" />
+
     <el-alert
       v-if="loadFailed"
       title="训练负荷加载失败"
@@ -428,7 +464,9 @@ onBeforeUnmount(() => {
     <div class="load-summary">
       <el-card class="load-summary-card" shadow="never">
         <p class="load-summary-label">训练状态</p>
-        <p class="load-summary-value">{{ statusLabel(latest?.trainingStatusPhrase) }}</p>
+        <p class="load-summary-value">
+          {{ statusLabel(latest?.trainingStatusPhrase) }}
+        </p>
         <p class="load-summary-meta">
           更新于 {{ latest?.calendarDate ?? "--" }}
         </p>
@@ -439,7 +477,11 @@ onBeforeUnmount(() => {
           {{ formatNumber(latest?.acwrPercent, 0, "%") }}
         </p>
         <p class="load-summary-meta">
-          <el-tag :type="acwrTagType(latest?.acwrStatus)" size="small" effect="light">
+          <el-tag
+            :type="acwrTagType(latest?.acwrStatus)"
+            size="small"
+            effect="light"
+          >
             {{ acwrLabel(latest?.acwrStatus) }}
           </el-tag>
         </p>
@@ -447,7 +489,8 @@ onBeforeUnmount(() => {
       <el-card class="load-summary-card" shadow="never">
         <p class="load-summary-label">急性 / 慢性负荷</p>
         <p class="load-summary-value">
-          {{ formatNumber(latest?.acuteLoad) }} / {{ formatNumber(latest?.chronicLoad) }}
+          {{ formatNumber(latest?.acuteLoad) }} /
+          {{ formatNumber(latest?.chronicLoad) }}
         </p>
         <p class="load-summary-meta">
           合理区间 {{ formatNumber(latest?.chronicLoadMin) }}–{{
@@ -470,9 +513,12 @@ onBeforeUnmount(() => {
           {{ wattsPerKg == null ? "--" : `${wattsPerKg.toFixed(2)} W/kg` }}
         </p>
         <p class="load-summary-meta">
-          <template v-if="wattsPerKg == null">需要体重，请在下方打卡填写</template>
+          <template v-if="wattsPerKg == null"
+            >需要体重，请在下方打卡填写</template
+          >
           <template v-else>
-            {{ currentFtp?.ftpWatts }} W ÷ {{ formatWeight(latestWeight?.weightKg) }}
+            {{ currentFtp?.ftpWatts }} W ÷
+            {{ formatWeight(latestWeight?.weightKg) }}
           </template>
         </p>
       </el-card>
@@ -483,14 +529,20 @@ onBeforeUnmount(() => {
         <p class="load-section-title">负荷平衡诊断</p>
         <el-tag
           v-if="balanceText"
-          :type="latest?.balanceFeedbackPhrase === 'BALANCED' ? 'success' : 'warning'"
+          :type="
+            latest?.balanceFeedbackPhrase === 'BALANCED' ? 'success' : 'warning'
+          "
           effect="light"
         >
           {{ balanceText }}
         </el-tag>
       </div>
       <ul class="balance-list">
-        <li v-for="row in balanceRows" :key="row.label" :class="`balance-${row.level}`">
+        <li
+          v-for="row in balanceRows"
+          :key="row.label"
+          :class="`balance-${row.level}`"
+        >
           <div class="balance-row-head">
             <strong>{{ row.label }}</strong>
             <span>
@@ -499,7 +551,10 @@ onBeforeUnmount(() => {
             </span>
           </div>
           <div class="balance-bar">
-            <div class="balance-bar-fill" :style="{ width: `${balancePercent(row)}%` }" />
+            <div
+              class="balance-bar-fill"
+              :style="{ width: `${balancePercent(row)}%` }"
+            />
           </div>
         </li>
       </ul>
@@ -524,10 +579,12 @@ onBeforeUnmount(() => {
       <div ref="chartRef" class="load-chart" />
     </el-card>
 
-    <el-card class="checkin-card" shadow="never">
+    <el-card id="checkin" class="checkin-card" shadow="never">
       <p class="load-section-title">每日打卡</p>
       <p class="checkin-hint">
-        体重与主观疲劳度在 Garmin API 里不存在，只能手填。体重填一次就能算出功体比。
+        记录今天训练前的感受：RPE 在这里指主观疲劳，1 很轻松、10
+        极度疲劳；不是单次训练结束后的用力评分。近 14
+        天体重用于今日建议的功体比换算，保存后自动重新评估。
       </p>
       <div class="checkin-form">
         <ElDatePicker
@@ -580,11 +637,21 @@ onBeforeUnmount(() => {
         class="checkin-feedback"
       />
 
-      <el-empty v-if="recentCheckins.length === 0" description="还没有打卡记录" />
-      <el-table v-else :data="recentCheckins" class="checkin-table" row-key="calendarDate">
+      <el-empty
+        v-if="recentCheckins.length === 0"
+        description="还没有打卡记录"
+      />
+      <el-table
+        v-else
+        :data="recentCheckins"
+        class="checkin-table"
+        row-key="calendarDate"
+      >
         <el-table-column label="日期" prop="calendarDate" width="120" />
         <el-table-column label="体重" width="100">
-          <template #default="{ row }">{{ formatWeight(row.weightKg) }}</template>
+          <template #default="{ row }">{{
+            formatWeight(row.weightKg)
+          }}</template>
         </el-table-column>
         <el-table-column label="RPE" width="80">
           <template #default="{ row }">{{ row.rpe ?? "--" }}</template>
