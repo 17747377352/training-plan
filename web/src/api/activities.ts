@@ -1,4 +1,9 @@
-import type { ActivityQuery, ActivitySummary, PageResult } from "../types/api";
+import type {
+  ActivityDetail,
+  ActivityQuery,
+  ActivitySummary,
+  PageResult,
+} from "../types/api";
 import { request } from "../utils/request";
 
 export function listActivities(
@@ -13,4 +18,8 @@ export function listActivities(
 
 export function listActivityTypes(): Promise<string[]> {
   return request({ method: "GET", url: "/api/activities/types" });
+}
+
+export function getActivity(id: number): Promise<ActivityDetail> {
+  return request({ method: "GET", url: `/api/activities/${id}` });
 }

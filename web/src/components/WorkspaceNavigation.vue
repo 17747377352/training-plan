@@ -52,6 +52,12 @@ const menuGroups: MenuGroup[] = [
     ],
   },
 ];
+
+function isActive(path: string, activePath: string): boolean {
+  return (
+    activePath === path || (path !== "/" && activePath.startsWith(`${path}/`))
+  );
+}
 </script>
 
 <template>
@@ -63,7 +69,7 @@ const menuGroups: MenuGroup[] = [
         :key="item.path"
         type="button"
         class="nav-item"
-        :class="{ active: activePath === item.path }"
+        :class="{ active: isActive(item.path, activePath) }"
         :disabled="Boolean(item.adminOnly && !isAdmin)"
         @click="
           emit('navigate', item.path, Boolean(item.adminOnly && !isAdmin))

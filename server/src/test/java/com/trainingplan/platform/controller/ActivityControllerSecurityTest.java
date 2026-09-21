@@ -104,6 +104,16 @@ class ActivityControllerSecurityTest {
                 .andExpect(jsonPath("$.data[0]").value("road_biking"));
     }
 
+    @Test
+    void shouldGetActivityDetailForJwtUser() throws Exception {
+        mockMvc.perform(get("/api/activities/101")
+                        .with(authentication(userAuthentication("7"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        verify(activityService).getActivity(7L, 101L);
+    }
+
     private JwtAuthenticationToken userAuthentication(String subject) {
         Jwt jwt = Jwt.withTokenValue("unit-test-token")
                 .header("alg", "HS256")

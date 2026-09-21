@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.trainingplan.platform.common.api.PageResult;
 import com.trainingplan.platform.common.error.ErrorCode;
 import com.trainingplan.platform.common.exception.BusinessException;
+import com.trainingplan.platform.dto.activity.ActivityDetailDto;
 import com.trainingplan.platform.dto.activity.ActivityQuery;
 import com.trainingplan.platform.dto.activity.ActivitySummaryDto;
 import com.trainingplan.platform.entity.Activity;
@@ -68,6 +69,23 @@ public class ActivityServiceImpl implements ActivityService {
                 .map(this::toSummary)
                 .toList();
         return new PageResult<>(page.getTotal(), page.getCurrent(), page.getSize(), records);
+    }
+
+    @Override
+    public ActivityDetailDto getActivity(Long userId, Long activityId) {
+        userService.getProfile(userId);
+        List<Long> accountIds = findAccountIds(userId);
+        if (accountIds.isEmpty()) {
+            throw activityNotFound();
+        }
+
+        Activity activity = activityMapper.selectOne(Wrappers.<Activity>lambdaQuery()
+                .eq(Activity::getId, activityId)
+                .in(Activity::getGarminAccountId, accountIds));
+        if (activity == null) {
+            throw activityNotFound();
+        }
+        return toDetail(activity);
     }
 
     @Override
@@ -146,5 +164,70 @@ public class ActivityServiceImpl implements ActivityService {
                 activity.getTrainingEffectLabel(),
                 activity.getActivityTrainingLoad(),
                 activity.getVo2maxValue());
+    }
+
+    private ActivityDetailDto toDetail(Activity activity) {
+        return new ActivityDetailDto(
+                activity.getId(),
+                activity.getGarminAccountId(),
+                idToString(activity.getGarminActivityId()),
+                activity.getActivityTypeKey(),
+                activity.getActivityTypeId(),
+                activity.getParentTypeId(),
+                activity.getActivityName(),
+                activity.getStartTimeGmt(),
+                activity.getStartTimeLocal(),
+                activity.getDurationSeconds(),
+                activity.getMovingDurationSeconds(),
+                activity.getElapsedDurationSeconds(),
+                activity.getDistanceMeters(),
+                activity.getElevationGain(),
+                activity.getElevationLoss(),
+                activity.getAvgElevation(),
+                activity.getMaxElevation(),
+                activity.getMinElevation(),
+                activity.getAverageSpeed(),
+                activity.getMaxSpeed(),
+                activity.getAverageHr(),
+                activity.getMaxHr(),
+                activity.getCalories(),
+                activity.getBmrCalories(),
+                activity.getAvgPower(),
+                activity.getMaxPower(),
+                activity.getNormPower(),
+                activity.getMax20minPower(),
+                activity.getIntensityFactor(),
+                activity.getTrainingStressScore(),
+                activity.getAvgCadence(),
+                activity.getMaxCadence(),
+                activity.getAvgLeftBalance(),
+                activity.getAerobicTrainingEffect(),
+                activity.getAnaerobicTrainingEffect(),
+                activity.getTrainingEffectLabel(),
+                activity.getActivityTrainingLoad(),
+                activity.getPowerZone1Seconds(),
+                activity.getPowerZone2Seconds(),
+                activity.getPowerZone3Seconds(),
+                activity.getPowerZone4Seconds(),
+                activity.getPowerZone5Seconds(),
+                activity.getPowerZone6Seconds(),
+                activity.getPowerZone7Seconds(),
+                activity.getLapCount(),
+                activity.getStrokes(),
+                activity.getAvgRespirationRate(),
+                activity.getMinTemperature(),
+                activity.getMaxTemperature(),
+                activity.getVo2maxValue(),
+                idToString(activity.getDeviceId()),
+                activity.getCreateTime(),
+                activity.getUpdateTime());
+    }
+
+    private BusinessException activityNotFound() {
+        return new BusinessException(ErrorCode.NOT_FOUND, "活动不存在");
+    }
+
+    private String idToString(Long value) {
+        return value == null ? null : value.toString();
     }
 }

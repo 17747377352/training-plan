@@ -90,3 +90,60 @@ export interface ActivitySummary {
   activityTrainingLoad?: number | null;
   vo2maxValue?: number | null;
 }
+
+/** activity 表中已入库的全部字段。 */
+export interface ActivityDetail {
+  id: number;
+  garminAccountId: number;
+  garminActivityId: string;
+  activityTypeKey?: string | null;
+  activityTypeId?: number | null;
+  parentTypeId?: number | null;
+  activityName?: string | null;
+  startTimeGmt?: string | null;
+  startTimeLocal?: string | null;
+  durationSeconds?: number | null;
+  movingDurationSeconds?: number | null;
+  elapsedDurationSeconds?: number | null;
+  distanceMeters?: number | null;
+  elevationGain?: number | null;
+  elevationLoss?: number | null;
+  avgElevation?: number | null;
+  maxElevation?: number | null;
+  minElevation?: number | null;
+  averageSpeed?: number | null;
+  maxSpeed?: number | null;
+  averageHr?: number | null;
+  maxHr?: number | null;
+  calories?: number | null;
+  bmrCalories?: number | null;
+  avgPower?: number | null;
+  maxPower?: number | null;
+  normPower?: number | null;
+  max20minPower?: number | null;
+  intensityFactor?: number | null;
+  trainingStressScore?: number | null;
+  avgCadence?: number | null;
+  maxCadence?: number | null;
+  avgLeftBalance?: number | null;
+  aerobicTrainingEffect?: number | null;
+  anaerobicTrainingEffect?: number | null;
+  trainingEffectLabel?: string | null;
+  activityTrainingLoad?: number | null;
+  powerZone1Seconds?: number | null;
+  powerZone2Seconds?: number | null;
+  powerZone3Seconds?: number | null;
+  powerZone4Seconds?: number | null;
+  powerZone5Seconds?: number | null;
+  powerZone6Seconds?: number | null;
+  powerZone7Seconds?: number | null;
+  lapCount?: number | null;
+  strokes?: number | null;
+  avgRespirationRate?: number | null;
+  minTemperature?: number | null;
+  maxTemperature?: number | null;
+  vo2maxValue?: number | null;
+  deviceId?: string | null;
+  createTime?: string | null;
+  updateTime?: string | null;
+}

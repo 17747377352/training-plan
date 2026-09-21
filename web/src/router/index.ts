@@ -27,6 +27,12 @@ const router = createRouter({
           meta: { title: "活动" },
         },
         {
+          path: "activities/:id",
+          name: "activity-detail",
+          component: () => import("../views/ActivityDetailView.vue"),
+          meta: { title: "活动详情" },
+        },
+        {
           path: "garmin",
           name: "garmin",
           component: () => import("../views/GarminAccountsView.vue"),

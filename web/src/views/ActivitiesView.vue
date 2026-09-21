@@ -258,124 +258,130 @@ onMounted(() => {
       </el-empty>
 
       <div v-else class="activity-list">
-        <article
+        <router-link
           v-for="activity in activities"
           :key="activity.id"
-          class="activity-record"
+          :to="{ name: 'activity-detail', params: { id: activity.id } }"
+          class="activity-record-link"
         >
-          <header class="activity-record-header">
-            <div class="activity-identity">
-              <span class="activity-bike-icon">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
+          <article class="activity-record">
+            <header class="activity-record-header">
+              <div class="activity-identity">
+                <span class="activity-bike-icon">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <circle cx="6" cy="17.5" r="3" />
+                    <circle cx="18" cy="17.5" r="3" />
+                    <path d="m6 17.5 3.2-6.2h4.3l4.5 6.2" />
+                    <path d="m9.2 11.3 3.4 6.2 3-9.2" />
+                    <path d="M13.6 8.3h3M8.6 8.3h2" />
+                  </svg>
+                </span>
+                <div>
+                  <h2>{{ displayTitle(activity) }}</h2>
+                  <p>
+                    {{ formatDate(activity.startTime) }}
+                    <span></span>
+                    {{ activityTypeLabel(activity.activityTypeKey) }}
+                  </p>
+                </div>
+              </div>
+              <div class="activity-primary-stats">
+                <div>
+                  <strong>{{ formatDistance(activity.distanceMeters) }}</strong>
+                  <span>距离</span>
+                </div>
+                <div>
+                  <strong>{{ displayDuration(activity) }}</strong>
+                  <span>移动时间</span>
+                </div>
+              </div>
+            </header>
+
+            <div class="activity-metrics">
+              <div class="activity-metric">
+                <span>累计爬升</span>
+                <strong>{{
+                  formatNumber(activity.elevationGain, " m")
+                }}</strong>
+              </div>
+              <div class="activity-metric">
+                <span>平均速度</span>
+                <strong>{{ formatSpeed(activity.averageSpeed) }}</strong>
+              </div>
+              <div class="activity-metric">
+                <span>心率 平均 / 最大</span>
+                <strong>
+                  {{ formatNumber(activity.averageHr) }} /
+                  {{ formatNumber(activity.maxHr, " bpm") }}
+                </strong>
+              </div>
+              <div class="activity-metric power-metric">
+                <span>功率 AP / NP</span>
+                <strong>
+                  {{ formatNumber(activity.avgPower) }} /
+                  {{ formatNumber(activity.normPower, " W") }}
+                </strong>
+              </div>
+              <div class="activity-metric">
+                <span>TSS / IF</span>
+                <strong>
+                  {{ formatNumber(activity.trainingStressScore) }} /
+                  {{ formatNumber(activity.intensityFactor, "", 2) }}
+                </strong>
+              </div>
+              <div class="activity-metric">
+                <span>平均踏频</span>
+                <strong>{{ formatNumber(activity.avgCadence, " rpm") }}</strong>
+              </div>
+            </div>
+
+            <footer class="activity-record-footer">
+              <div class="activity-tags">
+                <el-tag
+                  v-if="activity.trainingEffectLabel"
+                  type="success"
+                  effect="plain"
+                  size="small"
                 >
-                  <circle cx="6" cy="17.5" r="3" />
-                  <circle cx="18" cy="17.5" r="3" />
-                  <path d="m6 17.5 3.2-6.2h4.3l4.5 6.2" />
-                  <path d="m9.2 11.3 3.4 6.2 3-9.2" />
-                  <path d="M13.6 8.3h3M8.6 8.3h2" />
-                </svg>
-              </span>
-              <div>
-                <h2>{{ displayTitle(activity) }}</h2>
-                <p>
-                  {{ formatDate(activity.startTime) }}
-                  <span></span>
-                  {{ activityTypeLabel(activity.activityTypeKey) }}
-                </p>
+                  {{ activity.trainingEffectLabel }}
+                </el-tag>
+                <el-tag
+                  v-if="activity.max20minPower != null"
+                  type="info"
+                  effect="plain"
+                  size="small"
+                >
+                  20min {{ formatNumber(activity.max20minPower, " W") }}
+                </el-tag>
+                <el-tag
+                  v-if="activity.vo2maxValue != null"
+                  type="info"
+                  effect="plain"
+                  size="small"
+                >
+                  VO₂max {{ formatNumber(activity.vo2maxValue, "", 1) }}
+                </el-tag>
               </div>
-            </div>
-            <div class="activity-primary-stats">
-              <div>
-                <strong>{{ formatDistance(activity.distanceMeters) }}</strong>
-                <span>距离</span>
+              <div class="activity-record-meta">
+                <span
+                  v-if="activity.calories != null"
+                  class="activity-calories"
+                >
+                  {{ formatNumber(activity.calories, " kcal") }}
+                </span>
+                <span class="activity-detail-link">查看详情 →</span>
               </div>
-              <div>
-                <strong>{{ displayDuration(activity) }}</strong>
-                <span>移动时间</span>
-              </div>
-            </div>
-          </header>
-
-          <div class="activity-metrics">
-            <div class="activity-metric">
-              <span>累计爬升</span>
-              <strong>{{ formatNumber(activity.elevationGain, " m") }}</strong>
-            </div>
-            <div class="activity-metric">
-              <span>平均速度</span>
-              <strong>{{ formatSpeed(activity.averageSpeed) }}</strong>
-            </div>
-            <div class="activity-metric">
-              <span>心率 平均 / 最大</span>
-              <strong>
-                {{ formatNumber(activity.averageHr) }} /
-                {{ formatNumber(activity.maxHr, " bpm") }}
-              </strong>
-            </div>
-            <div class="activity-metric power-metric">
-              <span>功率 AP / NP</span>
-              <strong>
-                {{ formatNumber(activity.avgPower) }} /
-                {{ formatNumber(activity.normPower, " W") }}
-              </strong>
-            </div>
-            <div class="activity-metric">
-              <span>TSS / IF</span>
-              <strong>
-                {{ formatNumber(activity.trainingStressScore) }} /
-                {{ formatNumber(activity.intensityFactor, "", 2) }}
-              </strong>
-            </div>
-            <div class="activity-metric">
-              <span>踏频 / 左右平衡</span>
-              <strong>
-                {{ formatNumber(activity.avgCadence) }} rpm
-                <template v-if="activity.avgLeftBalance != null">
-                  · {{ formatNumber(activity.avgLeftBalance, "%", 1) }} L
-                </template>
-              </strong>
-            </div>
-          </div>
-
-          <footer class="activity-record-footer">
-            <div class="activity-tags">
-              <el-tag
-                v-if="activity.trainingEffectLabel"
-                type="success"
-                effect="plain"
-                size="small"
-              >
-                {{ activity.trainingEffectLabel }}
-              </el-tag>
-              <el-tag
-                v-if="activity.max20minPower != null"
-                type="info"
-                effect="plain"
-                size="small"
-              >
-                20min {{ formatNumber(activity.max20minPower, " W") }}
-              </el-tag>
-              <el-tag
-                v-if="activity.vo2maxValue != null"
-                type="info"
-                effect="plain"
-                size="small"
-              >
-                VO₂max {{ formatNumber(activity.vo2maxValue, "", 1) }}
-              </el-tag>
-            </div>
-            <span v-if="activity.calories != null" class="activity-calories">
-              {{ formatNumber(activity.calories, " kcal") }}
-            </span>
-          </footer>
-        </article>
+            </footer>
+          </article>
+        </router-link>
       </div>
     </div>
 

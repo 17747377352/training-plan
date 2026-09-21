@@ -1,6 +1,7 @@
 package com.trainingplan.platform.service;
 
 import com.trainingplan.platform.common.api.PageResult;
+import com.trainingplan.platform.dto.activity.ActivityDetailDto;
 import com.trainingplan.platform.dto.activity.ActivityQuery;
 import com.trainingplan.platform.dto.activity.ActivitySummaryDto;
 
@@ -22,6 +23,15 @@ public interface ActivityService {
      * @return 活动分页
      */
     PageResult<ActivitySummaryDto> listActivities(Long userId, ActivityQuery query);
+
+    /**
+     * 查询当前用户的单条活动详情。
+     *
+     * @param userId     平台用户 ID
+     * @param activityId 活动主键
+     * @return 活动全部已入库字段
+     */
+    ActivityDetailDto getActivity(Long userId, Long activityId);
 
     /**
      * 查询当前用户已入库的活动类型。

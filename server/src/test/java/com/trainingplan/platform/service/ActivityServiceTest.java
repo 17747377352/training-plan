@@ -8,6 +8,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.trainingplan.platform.common.api.PageResult;
 import com.trainingplan.platform.common.error.ErrorCode;
 import com.trainingplan.platform.common.exception.BusinessException;
+import com.trainingplan.platform.dto.activity.ActivityDetailDto;
 import com.trainingplan.platform.dto.activity.ActivityQuery;
 import com.trainingplan.platform.dto.activity.ActivitySummaryDto;
 import com.trainingplan.platform.entity.Activity;
@@ -24,6 +25,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -124,9 +126,63 @@ class ActivityServiceTest {
                 .containsExactly("indoor_cycling", "road_biking");
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldReturnOwnedActivityDetail() {
+        GarminAccount account = new GarminAccount();
+        account.setId(11L);
+        when(garminAccountMapper.selectList(any(Wrapper.class))).thenReturn(List.of(account));
+
+        Activity activity = activity();
+        activity.setGarminAccountId(11L);
+        activity.setGarminActivityId(998877L);
+        activity.setAvgCadence(88D);
+        activity.setAvgLeftBalance(49.3D);
+        activity.setPowerZone2Seconds(8_200D);
+        activity.setDeviceId(5566L);
+        when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(activity);
+
+        ActivityDetailDto result = activityService.getActivity(7L, 101L);
+
+        assertThat(result.id()).isEqualTo(101L);
+        assertThat(result.garminActivityId()).isEqualTo("998877");
+        assertThat(result.avgCadence()).isEqualTo(88D);
+        assertThat(result.avgLeftBalance()).isEqualTo(49.3D);
+        assertThat(result.powerZone2Seconds()).isEqualTo(8_200D);
+        assertThat(result.deviceId()).isEqualTo("5566");
+        verify(userService).getProfile(7L);
+        verify(activityMapper).selectOne(any(Wrapper.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldHideActivityOutsideCurrentUsersAccounts() {
+        GarminAccount account = new GarminAccount();
+        account.setId(11L);
+        when(garminAccountMapper.selectList(any(Wrapper.class))).thenReturn(List.of(account));
+        when(activityMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
+        assertThatThrownBy(() -> activityService.getActivity(7L, 999L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(ErrorCode.NOT_FOUND);
+    }
+
+    @Test
+    void detailDtoShouldCoverEveryPersistedActivityField() {
+        assertThat(Arrays.stream(ActivityDetailDto.class.getRecordComponents())
+                .map(component -> component.getName()))
+                .containsExactlyInAnyOrder(
+                        Arrays.stream(Activity.class.getDeclaredFields())
+                                .filter(field -> !field.isSynthetic())
+                                .map(field -> field.getName())
+                                .toArray(String[]::new));
+    }
+
     private Activity activity() {
         Activity activity = new Activity();
         activity.setId(101L);
+        activity.setGarminAccountId(11L);
         activity.setActivityTypeKey("road_biking");
         activity.setActivityName("周末长距离");
         activity.setStartTimeLocal(LocalDateTime.of(2026, 9, 19, 8, 30));

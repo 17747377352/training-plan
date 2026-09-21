@@ -4,6 +4,7 @@ import com.trainingplan.platform.common.api.PageResult;
 import com.trainingplan.platform.common.api.Result;
 import com.trainingplan.platform.common.error.ErrorCode;
 import com.trainingplan.platform.common.exception.BusinessException;
+import com.trainingplan.platform.dto.activity.ActivityDetailDto;
 import com.trainingplan.platform.dto.activity.ActivityQuery;
 import com.trainingplan.platform.dto.activity.ActivitySummaryDto;
 import com.trainingplan.platform.service.ActivityService;
@@ -12,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -42,6 +44,20 @@ public class ActivityController {
             @Valid ActivityQuery query,
             @AuthenticationPrincipal Jwt jwt) {
         return Result.success(activityService.listActivities(currentUserId(jwt), query));
+    }
+
+    /**
+     * 查询当前用户的活动详情。
+     *
+     * @param id  活动主键
+     * @param jwt 当前登录令牌
+     * @return 活动全部已入库字段
+     */
+    @GetMapping("/{id}")
+    public Result<ActivityDetailDto> getActivity(
+            @PathVariable Long id,
+            @AuthenticationPrincipal Jwt jwt) {
+        return Result.success(activityService.getActivity(currentUserId(jwt), id));
     }
 
     /**
