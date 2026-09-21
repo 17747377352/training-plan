@@ -1937,3 +1937,82 @@ body {
   font-size: 12px;
   color: #c45656;
 }
+
+/* 训练目标设置 */
+.goal-load-error {
+  margin-bottom: 14px;
+}
+
+.goal-card {
+  margin-bottom: 16px;
+}
+
+.goal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.goal-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #223047;
+}
+
+.goal-hint {
+  margin: 0;
+  max-width: 620px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #8792a1;
+}
+
+.goal-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0 20px;
+}
+
+.goal-form .el-form-item:last-child {
+  grid-column: 1 / -1;
+}
+
+.goal-select,
+.goal-date,
+.goal-number {
+  width: 100%;
+}
+
+.goal-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #8792a1;
+}
+
+.goal-feedback {
+  margin-top: 14px;
+}
+
+.goal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+/* 建议面板里的训练目标行 */
+.advice-goal {
+  margin: 14px 0 0;
+  padding: 10px 14px;
+  border-radius: 9px;
+  background: #f1f6f5;
+  font-size: 13px;
+  color: #223047;
+}
+
+.advice-goal .advice-link {
+  margin-left: 6px;
+}

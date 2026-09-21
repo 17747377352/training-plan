@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { listCheckins, saveCheckin } from "../api/checkins";
+import { getTrainingGoal } from "../api/goals";
 import {
   getTrainingAdvice,
   getStoredTrainingPlan,
@@ -9,7 +10,7 @@ import {
   type AdviceLight,
   type TrainingAdvice,
 } from "../api/advice";
-import type { DailyCheckin } from "../types/api";
+import type { DailyCheckin, TrainingGoal } from "../types/api";
 
 const props = withDefaults(defineProps<{ revision?: number }>(), {
   revision: 0,
@@ -25,6 +26,8 @@ const generationError = ref("");
 const storedLightMismatch = ref(false);
 /** 当天打卡，用于一键记录 RPE；替换语义要求提交时必须带上已有字段。 */
 const todayCheckin = ref<DailyCheckin | null>(null);
+/** 当前训练目标，只用于展示：它决定练什么，不参与判灯。 */
+const goal = ref<TrainingGoal | null>(null);
 const savingRpe = ref(false);
 const quickError = ref("");
 
@@ -101,10 +104,12 @@ async function refresh() {
   generationError.value = "";
   try {
     // 计划已经落库，刷新时读回来，不再每次进页面都清空
-    const [result, stored] = await Promise.all([
+    const [result, stored, currentGoal] = await Promise.all([
       getTrainingAdvice(),
       getStoredTrainingPlan().catch(() => null),
+      getTrainingGoal().catch(() => null),
     ]);
+    goal.value = currentGoal;
     if (id !== requestId) return;
     advice.value = result;
     await loadTodayCheckin(result.calendarDate);
@@ -309,6 +314,28 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+      <p class="advice-goal">
+        <template v-if="goal">
+          训练目标：<strong>{{ goal.goalLabel }}</strong>
+          <template v-if="goal.daysToTarget != null">
+            · 距目标 {{ goal.daysToTarget }} 天
+          </template>
+          <template v-if="goal.weeklySessions">
+            · 每周 {{ goal.weeklySessions }} 次
+          </template>
+          <template v-if="goal.weeklyMinutes">
+            / {{ goal.weeklyMinutes }} 分钟
+          </template>
+          <RouterLink class="advice-link" to="/settings">调整目标 →</RouterLink>
+        </template>
+        <template v-else>
+          还没有训练目标，生成计划只能给出通用安排。<RouterLink
+            class="advice-link"
+            to="/settings"
+            >去设置训练目标 →</RouterLink
+          >
+        </template>
+      </p>
       <div class="quick-rpe">
         <div class="quick-rpe-head">
           <strong>今天感觉如何？</strong>

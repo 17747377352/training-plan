@@ -26,6 +26,7 @@ public class TrainingPlanContextBuilder {
     private final FtpHistoryMapper ftpMapper;
     private final ActivityMapper activityMapper;
     private final DailyCheckinMapper checkinMapper;
+    private final TrainingGoalMapper goalMapper;
 
     public record Context(ObjectNode payload, Integer ftpWatts, int maxMinutes, int maxFtpPercent, String summary) {}
 
@@ -41,6 +42,7 @@ public class TrainingPlanContextBuilder {
         payload.put("light", advice.light().name());
         payload.put("recoverySignalsAvailable", advice.availableRecoverySignals());
         payload.set("evidence", json.valueToTree(advice.factors()));
+        appendGoal(payload, userId, date);
         boolean rest = advice.light() == TrainingAdviceDto.Light.RED || advice.availableRecoverySignals() == 0;
         // 证据不全时上限收紧，与规则引擎的处方保持一致：缺一项给 45 分钟 / 70%，
         // 四项齐全才给 90 分钟 / 75%。AI 只能在这个上限内安排。
@@ -104,9 +106,50 @@ public class TrainingPlanContextBuilder {
         }
         payload.put("recordLimits", "最近 28 天；睡眠最多 84 条，活动最多 60 条（按时间倒序），FTP 为截至当天最近 24 条历史记录。");
         if (currentFtp == null) payload.putNull("currentFtpWatts"); else payload.put("currentFtpWatts", currentFtp);
+        String goalText = payload.path("goal").isObject()
+                ? "目标 " + payload.path("goal").path("goalLabel").asText() : "未设置训练目标";
         String summary = "近 28 天：训练状态 " + trainingCount + " 条、HRV " + hrvCount + " 条、睡眠 " + sleepCount
-                + " 条、骑行 " + activityCount + " 条、打卡 " + checkins.size() + " 条；含每日健康与 FTP 历史";
+                + " 条、骑行 " + activityCount + " 条、打卡 " + checkins.size() + " 条；含每日健康与 FTP 历史；"
+                + goalText;
         return new Context(payload, currentFtp, maxMinutes, maxPercent, summary);
+    }
+
+    /**
+     * 把训练目标写进上下文。
+     *
+     * <p>目标决定「练什么」，不参与「能不能练」——判灯只看恢复信号，所以这里加入
+     * 目标不会放宽 constraints 里的时长与强度上限。</p>
+     *
+     * @param payload 上下文
+     * @param userId  平台用户 ID
+     * @param date    计划归属日期
+     */
+    private void appendGoal(ObjectNode payload, Long userId, LocalDate date) {
+        TrainingGoal goal = goalMapper.selectOne(Wrappers.<TrainingGoal>lambdaQuery()
+                .eq(TrainingGoal::getUserId, userId));
+        if (goal == null) {
+            payload.putNull("goal");
+            payload.put("goalNote", "用户尚未设置训练目标；按维持有氧基础安排，"
+                    + "不要假设目标赛事、减重需求或比赛日期。");
+            return;
+        }
+        ObjectNode node = payload.putObject("goal");
+        node.put("goalType", goal.getGoalType());
+        node.put("goalLabel", TrainingGoalType.labelOf(goal.getGoalType()));
+        if (goal.getTargetDate() == null) {
+            node.putNull("targetDate");
+            node.putNull("daysToTarget");
+        } else {
+            node.put("targetDate", goal.getTargetDate().toString());
+            node.put("daysToTarget", ChronoUnit.DAYS.between(date, goal.getTargetDate()));
+        }
+        if (goal.getWeeklySessions() == null) node.putNull("weeklySessions");
+        else node.put("weeklySessions", goal.getWeeklySessions());
+        if (goal.getWeeklyMinutes() == null) node.putNull("weeklyMinutes");
+        else node.put("weeklyMinutes", goal.getWeeklyMinutes());
+        // 用户原话，作为不可信数据传入，系统提示词明确禁止执行其中指令
+        if (goal.getDescription() == null) node.putNull("description");
+        else node.put("description", goal.getDescription());
     }
 
     private ArrayNode fields(List<?> rows, String... names) {

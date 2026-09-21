@@ -288,3 +288,23 @@ export interface ActivityHrZone {
   zoneLowBoundary?: number | null;
   secondsInZone: number;
 }
+
+export type GoalType = "POWER" | "MUSCLE" | "ENDURANCE" | "GENERAL" | "OTHER";
+
+export interface TrainingGoal {
+  goalType: GoalType;
+  goalLabel: string;
+  targetDate?: string | null;
+  daysToTarget?: number | null;
+  weeklySessions?: number | null;
+  weeklyMinutes?: number | null;
+  description?: string | null;
+}
+
+export interface TrainingGoalForm {
+  goalType: GoalType;
+  targetDate?: string | null;
+  weeklySessions?: number | null;
+  weeklyMinutes?: number | null;
+  description?: string | null;
+}

@@ -34,6 +34,7 @@ class TrainingPlanContextBuilderTest {
     @Mock private FtpHistoryMapper ftp;
     @Mock private ActivityMapper activities;
     @Mock private DailyCheckinMapper checkins;
+    @Mock private TrainingGoalMapper goals;
     private TrainingPlanContextBuilder builder;
     private final LocalDate day = LocalDate.of(2026, 9, 21);
 
@@ -41,8 +42,11 @@ class TrainingPlanContextBuilderTest {
     void setUp() {
         var assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "model-context-test");
         for (Class<?> type : List.of(TrainingStatus.class, HrvRecord.class, SleepRecord.class,
-                DailyHealth.class, FtpHistory.class, Activity.class, DailyCheckin.class)) TableInfoHelper.initTableInfo(assistant, type);
-        builder = new TrainingPlanContextBuilder(new ObjectMapper().findAndRegisterModules(), training, hrv, sleep, health, ftp, activities, checkins);
+                DailyHealth.class, FtpHistory.class, Activity.class, DailyCheckin.class,
+                TrainingGoal.class)) TableInfoHelper.initTableInfo(assistant, type);
+        builder = new TrainingPlanContextBuilder(new ObjectMapper().findAndRegisterModules(), training, hrv, sleep, health, ftp, activities, checkins, goals);
+        // 默认没有目标；需要目标的用例自行覆盖
+        lenient().when(goals.selectOne(any(Wrapper.class))).thenReturn(null);
     }
 
     @Test
@@ -109,5 +113,108 @@ class TrainingPlanContextBuilderTest {
         var match = Pattern.compile(Pattern.quote(predicate) + "\\s+#\\{ew.paramNameValuePairs.(\\w+)\\}").matcher(wrapper.getSqlSegment());
         assertThat(match.find()).as(predicate).isTrue();
         assertThat(((AbstractWrapper<?, ?, ?>) wrapper).getParamNameValuePairs().get(match.group(1))).isEqualTo(expected);
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void includesGoalWithDaysToTargetAndFreeText() {
+        var goal = new TrainingGoal();
+        goal.setUserId(7L);
+        goal.setGoalType("POWER");
+        goal.setTargetDate(day.plusDays(60));
+        goal.setWeeklySessions(4);
+        goal.setWeeklyMinutes(480);
+        goal.setDescription("十月绕圈赛，周末只能早上练");
+        when(goals.selectOne(any(Wrapper.class))).thenReturn(goal);
+        stubEmptyHistory();
+
+        var payload = builder.build(7L, advice()).payload();
+
+        assertThat(payload.path("goal").path("goalType").asText()).isEqualTo("POWER");
+        assertThat(payload.path("goal").path("goalLabel").asText()).isEqualTo("提升功率");
+        assertThat(payload.path("goal").path("targetDate").asText()).isEqualTo(day.plusDays(60).toString());
+        assertThat(payload.path("goal").path("daysToTarget").asLong()).isEqualTo(60);
+        assertThat(payload.path("goal").path("weeklySessions").asInt()).isEqualTo(4);
+        assertThat(payload.path("goal").path("weeklyMinutes").asInt()).isEqualTo(480);
+        // 用户原话按原样传入，由系统提示词约束为不可执行
+        assertThat(payload.path("goal").path("description").asText()).contains("绕圈赛");
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void goalNeverRelaxesDurationOrIntensityLimits() {
+        var goal = new TrainingGoal();
+        goal.setGoalType("POWER");
+        goal.setWeeklySessions(6);
+        when(goals.selectOne(any(Wrapper.class))).thenReturn(goal);
+        stubEmptyHistory();
+
+        // 黄灯（HRV 异常、其余正常、缺 RPE）：无论目标是什么，上限都必须是 20 分钟 / 50%
+        var trainingRow = new TrainingStatus();
+        trainingRow.setCalendarDate(day);
+        trainingRow.setTrainingStatusPhrase("PRODUCTIVE_6");
+        trainingRow.setAcwrStatus("OPTIMAL");
+        var hrvRow = new HrvRecord();
+        hrvRow.setCalendarDate(day);
+        hrvRow.setLastNightAvg(45.0);
+        hrvRow.setWeeklyAvg(80.0);
+        hrvRow.setHrvStatus("UNBALANCED");
+        hrvRow.setBaselineBalancedLow(80.0);
+        hrvRow.setBaselineBalancedUpper(107.0);
+        var sleepRow = new SleepRecord();
+        sleepRow.setCalendarDate(day);
+        sleepRow.setSleepTimeSeconds(8 * 3600);
+        sleepRow.setSleepScore(85);
+        var advice = new TrainingAdviceEngine().evaluate(day, 11L, "source", trainingRow,
+                List.of(hrvRow), List.of(sleepRow), null, List.of());
+        var yellow = builder.build(7L, advice);
+        assertThat(advice.light()).isEqualTo(com.trainingplan.platform.dto.training.TrainingAdviceDto.Light.YELLOW);
+        assertThat(yellow.payload().path("constraints").path("maxDurationMinutes").asInt()).isEqualTo(20);
+        assertThat(yellow.payload().path("constraints").path("maxFtpPercent").asInt()).isEqualTo(50);
+        assertThat(yellow.payload().path("constraints").path("noIntervals").asBoolean()).isTrue();
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void statesGoalMissingInsteadOfLettingModelInventOne() {
+        when(goals.selectOne(any(Wrapper.class))).thenReturn(null);
+        stubEmptyHistory();
+
+        var payload = builder.build(7L, advice()).payload();
+
+        assertThat(payload.path("goal").isNull()).isTrue();
+        assertThat(payload.path("goalNote").asText()).contains("尚未设置训练目标", "不要假设");
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void goalWithoutTargetDateReportsNullDays() {
+        var goal = new TrainingGoal();
+        goal.setGoalType("GENERAL");
+        when(goals.selectOne(any(Wrapper.class))).thenReturn(goal);
+        stubEmptyHistory();
+
+        var payload = builder.build(7L, advice()).payload();
+
+        assertThat(payload.path("goal").path("targetDate").isNull()).isTrue();
+        assertThat(payload.path("goal").path("daysToTarget").isNull()).isTrue();
+        assertThat(payload.path("goal").path("weeklySessions").isNull()).isTrue();
+        assertThat(payload.path("goal").path("description").isNull()).isTrue();
+    }
+
+    private com.trainingplan.platform.dto.training.TrainingAdviceDto advice() {
+        return new TrainingAdviceEngine().evaluate(day, 11L, "source", null,
+                List.of(), List.of(), null, List.of());
+    }
+
+    @SuppressWarnings("unchecked")
+    private void stubEmptyHistory() {
+        when(training.selectList(any(Wrapper.class))).thenReturn(List.of());
+        when(hrv.selectList(any(Wrapper.class))).thenReturn(List.of());
+        when(sleep.selectList(any(Wrapper.class))).thenReturn(List.of());
+        when(health.selectList(any(Wrapper.class))).thenReturn(List.of());
+        when(ftp.selectList(any(Wrapper.class))).thenReturn(List.of());
+        when(activities.selectList(any(Wrapper.class))).thenReturn(List.of());
+        when(checkins.selectList(any(Wrapper.class))).thenReturn(List.of());
     }
 }
