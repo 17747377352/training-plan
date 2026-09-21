@@ -993,10 +993,6 @@ onBeforeUnmount(() => {
         <h3 class="day-detail-title">HRV</h3>
         <dl class="day-detail-list">
           <div>
-            <dt>夜间 HRV</dt>
-            <dd>{{ formatNumber(selectedRow.hrv?.lastNightAvg, " ms") }}</dd>
-          </div>
-          <div>
             <dt>7 日均值</dt>
             <dd>{{ formatNumber(selectedRow.hrv?.weeklyAvg, " ms") }}</dd>
           </div>
@@ -1042,8 +1038,18 @@ onBeforeUnmount(() => {
             <dd>{{ formatHours(selectedRow.sleep?.awakeSleepSeconds) }}</dd>
           </div>
           <div>
+            <!-- 只保留这一行：睡眠接口的 avgOvernightHrv 与 HRV 接口的 lastNightAvg
+                 是同一个测量值（实测 20 天逐日一致），两处都显示会让人以为是两个指标。
+                 前者缺失时退回后者，避免无谓地显示「--」。 -->
             <dt>睡眠 HRV</dt>
-            <dd>{{ formatNumber(selectedRow.sleep?.avgSleepHrv, " ms") }}</dd>
+            <dd>
+              {{
+                formatNumber(
+                  selectedRow.sleep?.avgSleepHrv ?? selectedRow.hrv?.lastNightAvg,
+                  " ms",
+                )
+              }}
+            </dd>
           </div>
           <div>
             <dt>血氧</dt>
