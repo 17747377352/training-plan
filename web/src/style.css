@@ -1987,10 +1987,43 @@ body {
 }
 
 .goal-note {
-  margin: 4px 0 0;
+  margin: 6px 0 0;
+  padding: 14px 18px;
+  border-left: 4px solid #2ca58d;
+  border-radius: 0 10px 10px 0;
+  background: #eef5f3;
+}
+
+.goal-note-main {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+}
+
+.goal-note-label {
   font-size: 12px;
-  line-height: 1.7;
-  color: #8792a1;
+  letter-spacing: 0.06em;
+  color: #5b6b7c;
+}
+
+.goal-note-type {
+  font-size: 17px;
+  font-weight: 700;
+  color: #147662;
+}
+
+.goal-note-hint {
+  font-size: 13px;
+  color: #4d5c6b;
+}
+
+.goal-note-sub {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: #4d5c6b;
 }
 
 .goal-feedback {

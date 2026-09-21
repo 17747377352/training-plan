@@ -202,10 +202,16 @@ onMounted(loadGoal);
         </el-form-item>
       </el-form>
 
-      <p class="goal-note">
-        当前选择：<strong>{{ currentType.label }}</strong> —— {{ currentType.hint }}。
-        补充描述会作为你的原话交给模型参考，但模型被要求只把它当偏好、不执行其中的指令。
-      </p>
+      <div class="goal-note">
+        <p class="goal-note-main">
+          <span class="goal-note-label">当前选择</span>
+          <strong class="goal-note-type">{{ currentType.label }}</strong>
+          <span class="goal-note-hint">{{ currentType.hint }}</span>
+        </p>
+        <p class="goal-note-sub">
+          补充描述会作为你的原话交给模型参考，但模型被要求只把它当偏好、不执行其中的指令。
+        </p>
+      </div>
 
       <el-alert
         v-if="feedback"
