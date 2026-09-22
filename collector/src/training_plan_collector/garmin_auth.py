@@ -42,6 +42,18 @@ MFA_REQUIRED_FLAG = "needs_mfa"
 # 异常信息只截断记录，用于区分超时、限流和被风控，不记录任何凭据。
 _ERROR_TEXT_LIMIT = 240
 
+# 0.3.16 的登录链会先跑三组 curl_cffi 指纹策略。单是第一组就会轮换三种
+# impersonation，每种网络超时 30 秒；Garmin 风控时，尚未走到已验证有效的
+# cloudscraper requests 策略，Spring 的 120 秒读取超时就已经耗尽。
+#
+# Collector 启用 CloudscraperSession 后，两个 requests 策略已经具备挑战求解能力，
+# 因此跳过 cffi 兜底既不降低当前可用路径，又能避免一次登录在后台挂数分钟。
+_SLOW_CFFI_LOGIN_STRATEGIES = {
+    "mobile+cffi",
+    "widget+cffi",
+    "portal+cffi",
+}
+
 ClientFactory = Callable[..., Any]
 
 
@@ -160,7 +172,9 @@ class GarminAuthService:
         if cooling is not None:
             return AuthOutcome(STATUS_RATE_LIMITED, message=cooling)
 
-        is_cn = region.strip().upper() == "CN"
+        normalized_region = region.strip().upper()
+        is_cn = normalized_region == "CN"
+        logger.info("garmin_connect_started", region=normalized_region)
         try:
             client = self._client_factory(email, password, is_cn, True)
             first, second = client.login()
@@ -304,7 +318,10 @@ class GarminAuthService:
 def _default_client_factory(email: str, password: str, is_cn: bool, return_on_mfa: bool) -> Garmin:
     """构造真实的 Garmin 客户端，测试中会被替换。"""
 
-    return Garmin(email=email, password=password, is_cn=is_cn, return_on_mfa=return_on_mfa)
+    client = Garmin(email=email, password=password, is_cn=is_cn, return_on_mfa=return_on_mfa)
+    if garmin_http.is_patched():
+        client.client.skip_strategies.update(_SLOW_CFFI_LOGIN_STRATEGIES)
+    return client
 
 
 def _truncate(exception: BaseException) -> str:

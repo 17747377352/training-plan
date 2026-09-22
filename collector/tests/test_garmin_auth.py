@@ -7,7 +7,9 @@ from garminconnect.exceptions import (
     GarminConnectTooManyRequestsError,
 )
 
+from training_plan_collector import garmin_http
 from training_plan_collector.garmin_auth import (
+    _SLOW_CFFI_LOGIN_STRATEGIES,
     STATUS_CONNECTED,
     STATUS_FAILED,
     STATUS_INVALID_CREDENTIALS,
@@ -18,6 +20,7 @@ from training_plan_collector.garmin_auth import (
     STATUS_UNREACHABLE,
     GarminAuthService,
     MfaSessionStore,
+    _default_client_factory,
 )
 
 TOKEN_JSON = '{"di_token":"token-value","di_refresh_token":"refresh-value"}'
@@ -109,6 +112,20 @@ def test_connect_uses_global_region_by_default():
     service.connect("rider@example.com", "secret", "GLOBAL")
 
     assert captured["is_cn"] is False
+
+
+def test_default_client_factory_skips_slow_cffi_chain_when_cloudscraper_is_enabled():
+    """生产环境应先走已验证的 cloudscraper 路径，避免 120 秒前置等待。"""
+
+    garmin_http.restore_original_session()
+    try:
+        assert garmin_http.enable_cloudscraper_sessions() is True
+
+        client = _default_client_factory("rider@example.com", "secret", True, True)
+
+        assert client.client.skip_strategies == _SLOW_CFFI_LOGIN_STRATEGIES
+    finally:
+        garmin_http.restore_original_session()
 
 
 def test_connect_requires_mfa_and_keeps_session():
