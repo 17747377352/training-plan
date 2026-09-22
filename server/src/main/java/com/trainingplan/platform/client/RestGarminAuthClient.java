@@ -36,13 +36,17 @@ public class RestGarminAuthClient implements GarminAuthClient {
     private static final long CONNECTION_RETRY_DELAY_MILLIS = 250;
 
     private final RestClient restClient;
+    private final String collectorBaseUrl;
 
     public RestGarminAuthClient(RestClient.Builder builder, CollectorProperties properties) {
+        this.collectorBaseUrl = properties.baseUrl().replaceAll("/+$", "");
         this.restClient = builder
-                .baseUrl(properties.baseUrl())
+                .baseUrl(collectorBaseUrl)
                 .defaultHeader(SERVICE_TOKEN_HEADER, properties.serviceToken())
                 .requestFactory(requestFactory(properties.timeout()))
                 .build();
+        log.info("Collector 认证客户端配置完成 baseUrl={} timeoutMs={}",
+                collectorBaseUrl, properties.timeout().toMillis());
     }
 
     @Override
@@ -65,8 +69,9 @@ public class RestGarminAuthClient implements GarminAuthClient {
 
     private CollectorAuthResult post(String path, Map<String, String> payload) {
         String callId = UUID.randomUUID().toString().substring(0, 8);
+        String target = collectorBaseUrl + path;
         long startedNanos = System.nanoTime();
-        log.info("调用 Collector 认证接口开始 callId={} path={}", callId, path);
+        log.info("调用 Collector 认证接口开始 callId={} target={}", callId, target);
         for (int attempt = 1; attempt <= MAX_CONNECTION_ATTEMPTS; attempt++) {
             try {
                 CollectorAuthResponse response = restClient.post()
@@ -77,22 +82,22 @@ public class RestGarminAuthClient implements GarminAuthClient {
                 if (response == null) {
                     throw new BusinessException(ErrorCode.GARMIN_COLLECTOR_UNAVAILABLE);
                 }
-                log.info("调用 Collector 认证接口完成 callId={} path={} elapsedMs={} status={}",
-                        callId, path, elapsedMillis(startedNanos), response.status());
+                log.info("调用 Collector 认证接口完成 callId={} target={} elapsedMs={} status={}",
+                        callId, target, elapsedMillis(startedNanos), response.status());
                 return new CollectorAuthResult(
                         response.status(), response.tokenJson(), response.loginSessionId(), response.message());
             } catch (ResourceAccessException exception) {
                 Throwable cause = exception.getMostSpecificCause();
                 boolean timedOut = cause instanceof SocketTimeoutException;
                 if (cause instanceof ConnectException && attempt < MAX_CONNECTION_ATTEMPTS) {
-                    log.warn("Collector 连接失败，准备重试 callId={} path={} attempt={} retryDelayMs={} causeType={}",
-                            callId, path, attempt, CONNECTION_RETRY_DELAY_MILLIS,
+                    log.warn("Collector 连接失败，准备重试 callId={} target={} attempt={} retryDelayMs={} causeType={}",
+                            callId, target, attempt, CONNECTION_RETRY_DELAY_MILLIS,
                             cause.getClass().getSimpleName());
                     waitBeforeConnectionRetry();
                     continue;
                 }
-                log.error("调用 Collector 认证接口失败 callId={} path={} elapsedMs={} attempt={} failureType={} causeType={}",
-                        callId, path, elapsedMillis(startedNanos), attempt,
+                log.error("调用 Collector 认证接口失败 callId={} target={} elapsedMs={} attempt={} failureType={} causeType={}",
+                        callId, target, elapsedMillis(startedNanos), attempt,
                         timedOut ? "TIMEOUT" : "CONNECTION",
                         cause.getClass().getSimpleName());
                 // 只有真实的 SocketTimeoutException 才应提示登录耗时过长；连接拒绝、DNS
@@ -101,8 +106,8 @@ public class RestGarminAuthClient implements GarminAuthClient {
                         ? ErrorCode.GARMIN_CONNECT_TIMEOUT
                         : ErrorCode.GARMIN_COLLECTOR_UNAVAILABLE);
             } catch (RestClientException exception) {
-                log.error("调用 Collector 认证接口失败 callId={} path={} elapsedMs={} failureType={}",
-                        callId, path, elapsedMillis(startedNanos), exception.getClass().getSimpleName());
+                log.error("调用 Collector 认证接口失败 callId={} target={} elapsedMs={} failureType={}",
+                        callId, target, elapsedMillis(startedNanos), exception.getClass().getSimpleName());
                 throw new BusinessException(ErrorCode.GARMIN_COLLECTOR_UNAVAILABLE);
             }
         }

@@ -91,4 +91,22 @@ class RestGarminAuthClientTest {
         assertThat(result.tokenJson()).isEqualTo("{}");
         server.verify();
     }
+
+    @Test
+    void loggedBaseUrlIsNormalized() throws Exception {
+        // 这条只能断言字段本身：Spring 的 RestClient 会把多余斜杠归一化，
+        // 所以用 MockRestServiceServer 比对请求 URL 时，去掉不去掉尾斜杠都一样通过
+        // （变异测试确认过）。但日志里打印的 target 是排查连接问题的第一手信息，
+        // 它必须与实际地址一致——这正是本次改动的目的，因此直接钉住归一化结果。
+        RestClient.Builder builder = spy(RestClient.builder());
+        MockRestServiceServer.bindTo(builder).build();
+        doReturn(builder).when(builder).requestFactory(any());
+
+        RestGarminAuthClient trailing = new RestGarminAuthClient(builder,
+                new CollectorProperties("http://127.0.0.1:18090///", "unit-test-token", Duration.ofSeconds(120)));
+
+        java.lang.reflect.Field field = RestGarminAuthClient.class.getDeclaredField("collectorBaseUrl");
+        field.setAccessible(true);
+        assertThat(field.get(trailing)).isEqualTo("http://127.0.0.1:18090");
+    }
 }
