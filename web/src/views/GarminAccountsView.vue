@@ -115,7 +115,10 @@ async function handleConnect() {
   }
   connecting.value = true;
   try {
-    const result = await connectAccount({ ...connectForm });
+    const result = await connectAccount({
+      ...connectForm,
+      email: connectForm.email.trim(),
+    });
     // 密码不留在前端内存里
     connectForm.password = "";
     if (result.status === "MFA_REQUIRED" && result.loginSessionId) {
