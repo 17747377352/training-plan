@@ -59,6 +59,9 @@ app:
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173}
   security:
+    # 是否开放自助注册。默认关闭：开放注册意味着任何人都能创建账号并调用
+    # 付费的 AI 接口，生产环境必须显式开启（本地 dev profile 覆盖为 true）。
+    registration-enabled: ${REGISTRATION_ENABLED:false}
     jwt-secret: ${JWT_SECRET:}
     issuer: training-plan-server
     access-token-ttl: 15m

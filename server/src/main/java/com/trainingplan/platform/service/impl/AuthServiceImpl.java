@@ -19,6 +19,7 @@ import com.trainingplan.platform.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,6 +37,10 @@ import java.util.Locale;
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
 
+    /** 是否开放自助注册，默认关闭。 */
+    @Value("${app.security.registration-enabled:false}")
+    private boolean registrationEnabled;
+
     private static final String DEFAULT_ROLE_CODE = "USER";
 
     private final SysUserMapper userMapper;
@@ -48,6 +53,10 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public UserProfileDto register(RegisterRequest request) {
+        if (!isRegistrationEnabled()) {
+            // 关闭注册是「不提供该能力」，不是「参数错误」，所以用专门的错误码
+            throw new BusinessException(ErrorCode.REGISTRATION_DISABLED);
+        }
         String username = request.username().trim();
         String email = request.email().trim().toLowerCase(Locale.ROOT);
         Long duplicateCount = userMapper.selectCount(Wrappers.<SysUser>lambdaQuery()
@@ -109,5 +118,9 @@ public class AuthServiceImpl implements AuthService {
     public void logout(String refreshToken) {
         tokenService.revokeRefreshToken(refreshToken);
     }
-}
 
+    @Override
+    public boolean isRegistrationEnabled() {
+        return registrationEnabled;
+    }
+}

@@ -12,6 +12,16 @@ export interface LoginForm {
   password: string;
 }
 
+/**
+ * 是否开放自助注册。
+ *
+ * 公开接口，只返回一个布尔值；注册页据此在提交前如实告知，
+ * 而不是让人填完表单再失败。
+ */
+export function isRegistrationEnabled(): Promise<boolean> {
+  return request({ method: "GET", url: "/api/auth/registration-enabled" });
+}
+
 export function register(form: RegisterForm): Promise<UserProfile> {
   return request({ method: "POST", url: "/api/auth/register", data: form });
 }

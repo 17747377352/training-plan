@@ -2077,3 +2077,8 @@ body {
   font-size: 12px;
   color: #5b6b7c;
 }
+
+/* 注册关闭提示 */
+.register-closed {
+  margin-bottom: 16px;
+}

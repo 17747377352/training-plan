@@ -16,12 +16,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -47,6 +49,31 @@ class AuthServiceTest {
     void setUp() {
         authService = new AuthServiceImpl(
                 userMapper, roleMapper, userRoleMapper, passwordEncoder, tokenService, userService);
+        // 单测没有 Spring 容器，@Value 字段保持默认值 false。注册相关用例显式打开，
+        // 关闭场景由下面的用例单独覆盖。
+        ReflectionTestUtils.setField(authService, "registrationEnabled", true);
+    }
+
+    @Test
+    void shouldRejectRegistrationWhenDisabled() {
+        ReflectionTestUtils.setField(authService, "registrationEnabled", false);
+
+        assertThatThrownBy(() -> authService.register(
+                new RegisterRequest("runner01", "runner@example.com", "password123")))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(ErrorCode.REGISTRATION_DISABLED);
+
+        // 关闭注册时连用户名重复检查都不该做
+        verify(userMapper, never()).selectCount(any());
+        verify(userMapper, never()).insert(any(SysUser.class));
+    }
+
+    @Test
+    void reportsRegistrationSwitchState() {
+        assertThat(authService.isRegistrationEnabled()).isTrue();
+        ReflectionTestUtils.setField(authService, "registrationEnabled", false);
+        assertThat(authService.isRegistrationEnabled()).isFalse();
     }
 
     @Test

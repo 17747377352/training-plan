@@ -1,13 +1,28 @@
 <script setup lang="ts">
 import type { FormInstance, FormRules } from "element-plus";
-import { reactive, ref } from "vue";
+import { onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
+import { isRegistrationEnabled } from "../api/auth";
 import { useAuthStore } from "../stores/auth";
 
 const authStore = useAuthStore();
 const router = useRouter();
 const formRef = ref<FormInstance>();
 const loading = ref(false);
+/** 注册开关：默认按关闭处理，确认开放后才显示表单。 */
+const registrationOpen = ref(false);
+const checkingSwitch = ref(true);
+
+onMounted(async () => {
+  try {
+    registrationOpen.value = await isRegistrationEnabled();
+  } catch {
+    // 查不到开关时不放行注册，避免出现「表单能填但提交必失败」
+    registrationOpen.value = false;
+  } finally {
+    checkingSwitch.value = false;
+  }
+});
 const form = reactive({
   username: "",
   email: "",
