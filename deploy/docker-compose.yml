@@ -21,13 +21,13 @@ services:
       SPRING_DATA_REDIS_DATABASE: "5"
       COLLECTOR_BASE_URL: http://127.0.0.1:18090
       APP_CORS_ALLOWED_ORIGINS: https://songtop.xyz,https://www.songtop.xyz
-      REGISTRATION_ENABLED: "false"
-      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=70 -XX:InitialRAMPercentage=20 -XX:+ExitOnOutOfMemoryError
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-false}
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=65 -XX:InitialRAMPercentage=10 -XX:+ExitOnOutOfMemoryError
     security_opt:
       - no-new-privileges:true
     tmpfs:
       - /tmp:size=128m,mode=1777
-    mem_limit: 640m
+    mem_limit: 512m
     logging:
       driver: json-file
       options:
@@ -60,7 +60,7 @@ services:
       - no-new-privileges:true
     tmpfs:
       - /tmp:size=128m,mode=1777
-    mem_limit: 320m
+    mem_limit: 192m
     logging:
       driver: json-file
       options:

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useRoute } from "vue-router";
+import SiteLegalFooter from "./components/SiteLegalFooter.vue";
 
 const route = useRoute();
 const isPublicPage = computed(() => Boolean(route.meta.public));
@@ -18,6 +19,7 @@ const isPublicPage = computed(() => Boolean(route.meta.public));
       </div>
     </header>
     <router-view />
+    <SiteLegalFooter />
   </div>
   <router-view v-else />
 </template>

@@ -10,6 +10,7 @@ WEB_ROOT="${WEB_ROOT:-/var/www/plan}"
 MYSQL_CONTAINER="${MYSQL_CONTAINER:-mysql-server}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-redis-server}"
 BOOTSTRAP_SWAP="${BOOTSTRAP_SWAP:-1}"
+SKIP_IMAGE_BUILD="${SKIP_IMAGE_BUILD:-0}"
 
 log() { printf '[remote-deploy] %s\n' "$*"; }
 fail() { printf '[remote-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -80,7 +81,7 @@ docker inspect "$REDIS_CONTAINER" >/dev/null 2>&1 || fail "missing Redis contain
 
 log "validating database and Redis application credentials"
 docker exec -e MYSQL_PWD="$SPRING_DATASOURCE_PASSWORD" "$MYSQL_CONTAINER" \
-  mysql --protocol=TCP -h127.0.0.1 -u"$SPRING_DATASOURCE_USERNAME" \
+  mysql --protocol=TCP --host=127.0.0.1 --user="$SPRING_DATASOURCE_USERNAME" \
   --batch --skip-column-names training_plan -e 'SELECT 1' \
   | grep -qx '1' || fail "application database credentials cannot access training_plan"
 docker exec -e REDISCLI_AUTH="$SPRING_DATA_REDIS_PASSWORD" "$REDIS_CONTAINER" \
@@ -106,6 +107,8 @@ bootstrap_web_backup=""
 nginx_backup=""
 nginx_existed=0
 [[ -f "$NGINX_SITE" ]] && nginx_existed=1
+new_release_started=0
+deployment_completed=0
 
 rollback_containers() {
   log "rolling back containers"
@@ -146,27 +149,55 @@ restore_files() {
 }
 
 wait_for_url() {
-  local url="$1" attempts="${2:-90}"
+  local url="$1" attempts="${2:-60}"
   for ((i=1; i<=attempts; i++)); do
-    if curl --fail --silent --show-error --max-time 3 "$url" >/dev/null 2>&1; then
+    if curl --fail --silent --show-error --connect-timeout 1 --max-time 1 "$url" >/dev/null 2>&1; then
       return 0
     fi
-    sleep 2
+    sleep 1
   done
   return 1
 }
 
-log "building release images"
-"${compose[@]}" build
-log "starting release containers"
-"${compose[@]}" up -d --remove-orphans
+abort_deployment() {
+  trap - HUP INT TERM
+  if [[ "$new_release_started" == "1" && "$deployment_completed" == "0" ]]; then
+    rollback_containers
+  fi
+  fail "deployment interrupted; previous containers restored when available"
+}
+trap abort_deployment HUP INT TERM
 
-if ! wait_for_url http://127.0.0.1:18080/api/system/health 90 \
-  || ! wait_for_url http://127.0.0.1:18090/health 45; then
+log "building release images"
+if [[ "$SKIP_IMAGE_BUILD" == "1" ]]; then
+  docker image inspect "training-plan-server:$release_id" >/dev/null \
+    || fail "missing prebuilt server image for $release_id"
+  docker image inspect "training-plan-collector:$release_id" >/dev/null \
+    || fail "missing prebuilt collector image for $release_id"
+  log "using prebuilt release images"
+else
+  "${compose[@]}" build server
+  "${compose[@]}" build collector
+fi
+docker stop -t 5 training-plan-collector >/dev/null 2>&1 || true
+log "starting server"
+"${compose[@]}" up -d --no-deps server
+new_release_started=1
+
+if ! wait_for_url http://127.0.0.1:18080/api/system/health 60; then
   "${compose[@]}" ps || true
-  "${compose[@]}" logs --tail=100 || true
+  "${compose[@]}" logs --tail=100 server || true
   rollback_containers
-  fail "health check failed; previous containers restored when available"
+  fail "server health check failed; previous containers restored when available"
+fi
+
+log "starting collector"
+"${compose[@]}" up -d --no-deps collector
+if ! wait_for_url http://127.0.0.1:18090/health 30; then
+  "${compose[@]}" ps || true
+  "${compose[@]}" logs --tail=100 collector || true
+  rollback_containers
+  fail "collector health check failed; previous containers restored when available"
 fi
 
 log "installing and validating Nginx configuration"
@@ -200,6 +231,12 @@ if ! wait_for_url https://songtop.xyz/plan/ 15 \
   fail "public health check failed; previous release restored"
 fi
 
+ln -sfn "$RELEASE_DIR" "$APP_ROOT/current-server.next"
+mv -Tf "$APP_ROOT/current-server.next" "$APP_ROOT/current-server"
+ln -sfn "$RELEASE_DIR" "$APP_ROOT/current-web.next"
+mv -Tf "$APP_ROOT/current-web.next" "$APP_ROOT/current-web"
 log "deployment succeeded: $release_id"
+deployment_completed=1
+trap - HUP INT TERM
 log "database backup retained at $backup_file"
 "${compose[@]}" ps

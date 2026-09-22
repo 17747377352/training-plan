@@ -77,13 +77,31 @@ const router = createRouter({
       path: "/login",
       name: "login",
       component: () => import("../views/LoginView.vue"),
-      meta: { public: true },
+      meta: { public: true, guestOnly: true, title: "登录" },
     },
     {
       path: "/register",
       name: "register",
       component: () => import("../views/RegisterView.vue"),
-      meta: { public: true },
+      meta: { public: true, guestOnly: true, title: "注册" },
+    },
+    {
+      path: "/legal/terms",
+      name: "terms",
+      component: () => import("../views/TermsView.vue"),
+      meta: { public: true, title: "用户协议" },
+    },
+    {
+      path: "/legal/privacy",
+      name: "privacy",
+      component: () => import("../views/PrivacyPolicyView.vue"),
+      meta: { public: true, title: "隐私政策" },
+    },
+    {
+      path: "/legal/disclaimer",
+      name: "disclaimer",
+      component: () => import("../views/DisclaimerView.vue"),
+      meta: { public: true, title: "免责声明" },
     },
   ],
 });
@@ -93,7 +111,7 @@ router.beforeEach((to) => {
   if (!to.meta.public && !authenticated) {
     return { name: "login", query: { redirect: to.fullPath } };
   }
-  if (to.meta.public && authenticated) {
+  if (to.meta.guestOnly && authenticated) {
     return { name: "home" };
   }
   return true;

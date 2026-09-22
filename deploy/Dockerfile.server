@@ -1,4 +1,5 @@
-FROM eclipse-temurin:17-jre-jammy
+ARG SERVER_BASE_IMAGE=docker.m.daocloud.io/library/eclipse-temurin:17-jre-jammy
+FROM ${SERVER_BASE_IMAGE}
 
 RUN groupadd --system app \
     && useradd --system --gid app --home-dir /opt/app --create-home app

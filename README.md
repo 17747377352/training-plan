@@ -204,8 +204,19 @@ FLUSH PRIVILEGES;
 配置好后，在项目根目录执行：
 
 ```bash
-./deploy/deploy.sh
+./deploy/deploy.sh all
 ```
+
+日常可以只发布变更的组件：
+
+```bash
+./deploy/deploy.sh web       # 只构建和原子切换前端，不重启容器
+./deploy/deploy.sh server    # 只测试、构建和重启后端，不动前端/Collector
+./deploy/deploy.sh all       # 前端、后端和 Collector 全量发布（默认）
+```
+
+后端单独发布仍会先备份数据库，并在健康检查失败时恢复上一个后端镜像。
+前端单独发布通过符号链接原子切换，公网检查失败时恢复上一个前端版本。
 
 可用参数：
 
@@ -214,7 +225,14 @@ FLUSH PRIVILEGES;
 - `SKIP_TESTS=1`：复用现有构建产物，仅用于已手动验证的紧急发布。
 - `BOOTSTRAP_SWAP=0`：不在无 Swap 的小内存服务器上自动创建 2 GiB `/swapfile`。
 
-每次发布保留在 `/opt/training-plan/releases/<UTC时间>-<Git SHA>/`，脚本不会自动删除历史版本或备份。
+全量发布保留在 `/opt/training-plan/releases/`，前端单独发布保留在
+`/opt/training-plan/web-releases/`，后端单独发布保留在
+`/opt/training-plan/server-releases/`。脚本不会自动删除历史版本或数据库备份。
+
+服务器无法直连 Docker Hub，两个 Dockerfile 默认通过 `docker.m.daocloud.io`
+拉取官方 Python 和 Eclipse Temurin 基础镜像。如后续迁移到可直连 Docker Hub
+的环境，可在构建时通过 `SERVER_BASE_IMAGE` 和 `COLLECTOR_BASE_IMAGE` build args
+覆盖镜像地址。
 
 ## 开发状态
 

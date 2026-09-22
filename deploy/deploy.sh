@@ -7,6 +7,22 @@ REMOTE_ROOT="${REMOTE_ROOT:-/opt/training-plan}"
 ALLOW_DIRTY="${ALLOW_DIRTY:-0}"
 SKIP_TESTS="${SKIP_TESTS:-0}"
 BOOTSTRAP_SWAP="${BOOTSTRAP_SWAP:-1}"
+DEPLOY_TARGET="${1:-all}"
+
+case "$DEPLOY_TARGET" in
+  web)
+    exec "$PROJECT_ROOT/deploy/deploy-web.sh"
+    ;;
+  server)
+    exec "$PROJECT_ROOT/deploy/deploy-server.sh"
+    ;;
+  all)
+    ;;
+  *)
+    printf 'usage: %s [all|web|server]\n' "$0" >&2
+    exit 2
+    ;;
+esac
 
 log() { printf '[deploy] %s\n' "$*"; }
 fail() { printf '[deploy] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -88,7 +104,7 @@ printf 'release=%s\ngit_sha=%s\nbuilt_at=%s\n' \
   "$release_id" "$git_sha" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$bundle/RELEASE"
 
 archive="$tmp_dir/$release_id.tar.gz"
-tar -C "$bundle" -czf "$archive" .
+COPYFILE_DISABLE=1 tar -C "$bundle" -czf "$archive" .
 log "uploading release $release_id"
 scp "$archive" "$DEPLOY_HOST:$REMOTE_ROOT/incoming/$release_id.tar.gz"
 

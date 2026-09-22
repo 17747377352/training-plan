@@ -24,6 +24,7 @@ const errorMessage = ref("");
 const connecting = ref(false);
 const verifyingId = ref<number>();
 const switchingId = ref<number>();
+const sensitiveDataConsent = ref(false);
 
 const connectForm = reactive({
   email: "",
@@ -106,6 +107,10 @@ async function handleConnect() {
   if (connecting.value) return;
   if (!connectForm.email || !connectForm.password) {
     ElMessage.warning("请填写 Garmin 邮箱和密码");
+    return;
+  }
+  if (!sensitiveDataConsent.value) {
+    ElMessage.warning("请先单独同意处理健康与训练数据");
     return;
   }
   connecting.value = true;
@@ -210,6 +215,10 @@ async function handleImportToken() {
     ElMessage.warning("请填写 Garmin 邮箱与令牌内容");
     return;
   }
+  if (!sensitiveDataConsent.value) {
+    ElMessage.warning("请先单独同意处理健康与训练数据");
+    return;
+  }
   importSubmitting.value = true;
   try {
     const account = await importToken({
@@ -305,10 +314,19 @@ onMounted(loadAccounts);
           </el-select>
         </el-form-item>
         <el-form-item>
+          <el-checkbox v-model="sensitiveDataConsent" class="legal-consent">
+            我单独同意平台按
+            <router-link to="/legal/privacy" target="_blank"
+              >《隐私政策》</router-link
+            >
+            处理我的健康与训练数据，用于同步、恢复评估和训练计划。
+          </el-checkbox>
+        </el-form-item>
+        <el-form-item>
           <el-button
             type="primary"
             :loading="connecting"
-            :disabled="connecting"
+            :disabled="connecting || !sensitiveDataConsent"
             @click="handleConnect"
           >
             连接 Garmin
@@ -496,13 +514,22 @@ onMounted(loadAccounts);
             placeholder='{"di_token":"...","di_refresh_token":"...","di_client_id":"..."}'
           />
         </el-form-item>
+        <el-form-item>
+          <el-checkbox v-model="sensitiveDataConsent" class="legal-consent">
+            我单独同意平台按
+            <router-link to="/legal/privacy" target="_blank"
+              >《隐私政策》</router-link
+            >
+            处理我的健康与训练数据。
+          </el-checkbox>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="importDialogVisible = false">取消</el-button>
         <el-button
           type="primary"
           :loading="importSubmitting"
-          :disabled="importSubmitting"
+          :disabled="importSubmitting || !sensitiveDataConsent"
           @click="handleImportToken"
         >
           校验并导入

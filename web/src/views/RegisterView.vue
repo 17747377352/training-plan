@@ -12,6 +12,7 @@ const loading = ref(false);
 /** 注册开关：默认按关闭处理，确认开放后才显示表单。 */
 const registrationOpen = ref(false);
 const checkingSwitch = ref(true);
+const acceptedTerms = ref(false);
 
 onMounted(async () => {
   try {
@@ -61,6 +62,9 @@ const rules: FormRules<typeof form> = {
 
 async function submit(): Promise<void> {
   if (!(await formRef.value?.validate().catch(() => false))) return;
+  if (!acceptedTerms.value) {
+    return;
+  }
   loading.value = true;
   try {
     await authStore.register({
@@ -119,10 +123,23 @@ async function submit(): Promise<void> {
             show-password
           />
         </el-form-item>
+        <el-form-item>
+          <el-checkbox v-model="acceptedTerms" class="legal-consent">
+            我已年满 18 周岁，并已阅读同意
+            <router-link to="/legal/terms" target="_blank"
+              >《用户协议》</router-link
+            >
+            和
+            <router-link to="/legal/privacy" target="_blank"
+              >《隐私政策》</router-link
+            >
+          </el-checkbox>
+        </el-form-item>
         <el-button
           class="auth-submit"
           type="primary"
           :loading="loading"
+          :disabled="!acceptedTerms"
           @click="submit"
         >
           注册并登录

@@ -5,6 +5,7 @@ import {
   ElAside,
   ElButton,
   ElCard,
+  ElCheckbox,
   ElContainer,
   ElDialog,
   ElDrawer,
@@ -36,6 +37,7 @@ app.use(ElAlert);
 app.use(ElAside);
 app.use(ElButton);
 app.use(ElCard);
+app.use(ElCheckbox);
 app.use(ElContainer);
 app.use(ElDialog);
 app.use(ElDrawer);

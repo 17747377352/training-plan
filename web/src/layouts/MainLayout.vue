@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import WorkspaceAccount from "../components/WorkspaceAccount.vue";
 import WorkspaceNavigation from "../components/WorkspaceNavigation.vue";
+import SiteLegalFooter from "../components/SiteLegalFooter.vue";
 import { useAuthStore } from "../stores/auth";
 
 const authStore = useAuthStore();
@@ -94,6 +95,7 @@ onMounted(ensureProfile);
       <el-main class="workspace-content">
         <router-view />
       </el-main>
+      <SiteLegalFooter />
     </el-container>
 
     <el-drawer
