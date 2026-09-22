@@ -76,6 +76,20 @@ export function importToken(form: {
   });
 }
 
+/**
+ * 领取一次性配对码，供桌面助手回传令牌。
+ *
+ * Garmin 的登录端点按 IP 限流且配额极小（实测一次成功登录后立刻 429），
+ * 服务器上多用户共用一个出口 IP，所以登录只能发生在用户自己的机器上：
+ * 用户在页面上领码，助手凭码把令牌交回平台。
+ */
+export function createPairCode(): Promise<{
+  code: string;
+  expiresInSeconds: number;
+}> {
+  return request({ method: "POST", url: "/api/garmin/accounts/pair-code" });
+}
+
 /** 触发一次数据同步。days 为回溯天数，1 表示仅当天。 */
 export function triggerSync(id: number, days: number): Promise<number> {
   return request({

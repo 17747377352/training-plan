@@ -5,6 +5,7 @@ import com.trainingplan.platform.dto.garmin.ConnectGarminRequest;
 import com.trainingplan.platform.dto.garmin.GarminAccountDto;
 import com.trainingplan.platform.dto.garmin.GarminConnectResultDto;
 import com.trainingplan.platform.dto.garmin.ImportTokenRequest;
+import com.trainingplan.platform.dto.garmin.PairBindRequest;
 
 import java.util.List;
 
@@ -64,6 +65,17 @@ public interface GarminAccountService {
      * @return 绑定后的账号信息
      */
     GarminAccountDto importToken(Long userId, ImportTokenRequest request);
+
+    /**
+     * 桌面助手凭一次性配对码回传令牌完成绑定。
+     *
+     * <p>令牌由助手在用户自己机器上换取（每个 IP 一份独立配额），助手没有平台登录态，
+     * 因此用配对码定位平台用户；配对码取用即失效，绑定后不能再被复用。</p>
+     *
+     * @param request 配对码绑定请求
+     * @return 绑定后的账号信息
+     */
+    GarminAccountDto bindByPairCode(PairBindRequest request);
 
     /**
      * 启用或暂停自动同步。

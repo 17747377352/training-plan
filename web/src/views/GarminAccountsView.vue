@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import PageHeading from "../components/PageHeading.vue";
 import {
   connectAccount,
+  createPairCode,
   deleteAccount,
   importToken,
   listAccounts,
@@ -49,6 +50,17 @@ const importForm = reactive({
   tokenJson: "",
   region: "GLOBAL" as GarminRegion,
 });
+
+/** 桌面助手配对：助手持码回传令牌，页面轮询账号列表即可知道绑定完成。 */
+const pairDialogVisible = ref(false);
+const pairCode = ref("");
+const pairSeconds = ref(0);
+const pairLoading = ref(false);
+let pairPollTimer: number | undefined;
+
+/** 助手文件名与下载地址：它由前端静态目录原样发布，用户点链接即可保存。 */
+const PAIR_HELPER_FILE = "garmin_pair_helper.py";
+const PAIR_HELPER_URL = `${import.meta.env.BASE_URL}${PAIR_HELPER_FILE}`;
 
 /** 首次绑定后可选拉取的历史天数。 */
 const INITIAL_BACKFILL_DAYS = 15;
@@ -241,6 +253,70 @@ async function handleImportToken() {
   }
 }
 
+/** 领码并打开助手引导弹窗；绑定由助手在用户自己机器上完成。 */
+async function openPairDialog() {
+  if (!sensitiveDataConsent.value) {
+    ElMessage.warning("请先单独同意处理健康与训练数据");
+    return;
+  }
+  pairLoading.value = true;
+  try {
+    const result = await createPairCode();
+    pairCode.value = result.code;
+    pairSeconds.value = result.expiresInSeconds;
+    pairDialogVisible.value = true;
+    startPairPolling();
+  } catch {
+    // 错误提示由拦截器统一处理
+  } finally {
+    pairLoading.value = false;
+  }
+}
+
+/**
+ * 轮询账号列表，助手绑定成功后自动关窗并进入首次回溯。
+ *
+ * 用轮询而不是让用户手动刷新，是因为助手与页面之间没有其它通道；
+ * 5 秒一次、只在弹窗打开时运行，代价可以忽略。
+ */
+function startPairPolling() {
+  stopPairPolling();
+  const before = accounts.value.length;
+  pairPollTimer = window.setInterval(async () => {
+    try {
+      const list = await listAccounts();
+      accounts.value = list;
+      if (list.length > before) {
+        stopPairPolling();
+        pairDialogVisible.value = false;
+        ElMessage.success("绑定成功");
+        askInitialBackfill(list[0]?.id);
+      }
+    } catch {
+      // 单次轮询失败忽略，下一轮继续
+    }
+  }, 5000);
+}
+
+function stopPairPolling() {
+  if (pairPollTimer !== undefined) {
+    window.clearInterval(pairPollTimer);
+    pairPollTimer = undefined;
+  }
+}
+
+async function copyPairCode() {
+  try {
+    await navigator.clipboard.writeText(pairCode.value);
+    ElMessage.success("配对码已复制");
+  } catch {
+    // 非 HTTPS 或浏览器不允许时退化为手动选中
+    ElMessage.info("复制失败，请手动选中配对码");
+  }
+}
+
+onUnmounted(stopPairPolling);
+
 async function handleVerify(account: GarminAccount) {
   verifyingId.value = account.id;
   try {
@@ -335,6 +411,9 @@ onMounted(loadAccounts);
             连接 Garmin
           </el-button>
           <el-button @click="importDialogVisible = true">导入令牌</el-button>
+          <el-button :loading="pairLoading" @click="openPairDialog">
+            用桌面助手绑定
+          </el-button>
         </el-form-item>
       </el-form>
       <el-alert type="info" :closable="false" class="connect-hint">
@@ -539,5 +618,93 @@ onMounted(loadAccounts);
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="pairDialogVisible"
+      title="用桌面助手绑定 Garmin"
+      width="520px"
+      @closed="stopPairPolling"
+    >
+      <el-alert type="info" :closable="false" class="import-hint">
+        <template #default>
+          Garmin 的登录接口按 IP 限流，而这个平台所有用户共用一个出口
+          IP，所以登录必须在<strong>你自己的电脑</strong>上完成。
+          助手只把登录结果（令牌）交回平台，<strong>密码不经过平台</strong>。
+        </template>
+      </el-alert>
+
+      <ol class="pair-steps">
+        <li>
+          下载助手
+          <a :href="PAIR_HELPER_URL" :download="PAIR_HELPER_FILE">{{
+            PAIR_HELPER_FILE
+          }}</a>
+          （需要电脑上装了 Python 3.10+，然后
+          <code>pip install garminconnect cloudscraper</code>）
+        </li>
+        <li>
+          双击运行它，把下面这个配对码填进去
+          <div class="pair-code-row">
+            <span class="pair-code">{{ pairCode }}</span>
+            <el-button link type="primary" @click="copyPairCode">复制</el-button>
+          </div>
+          <span class="pair-hint"
+            >配对码 {{ Math.round(pairSeconds / 60) }} 分钟内有效，只能用一次</span
+          >
+        </li>
+        <li>在助手里填 Garmin 邮箱、密码（需要时再填验证码），点「开始绑定」</li>
+        <li>助手提示成功后，这个窗口会自动关闭并刷新账号列表</li>
+      </ol>
+
+      <el-alert type="warning" :closable="false" class="import-hint">
+        <template #default>
+          同一个网络下 Garmin 只允许很少的登录次数：密码输错一次可能就要等几分钟
+          再试，请不要连续点击。
+        </template>
+      </el-alert>
+
+      <template #footer>
+        <el-button @click="pairDialogVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="pairLoading" @click="openPairDialog">
+          重新获取配对码
+        </el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
+
+<style scoped>
+.pair-steps {
+  margin: 12px 0;
+  padding-left: 20px;
+  line-height: 1.9;
+  font-size: 13px;
+  color: #303133;
+}
+
+.pair-code-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 2px;
+}
+
+.pair-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: #147662;
+  background: #eef5f3;
+  border-left: 4px solid #2ca58d;
+  border-radius: 4px;
+  padding: 8px 14px;
+  /* 复制失败时用户可以直接点选整串，不必逐字拖 */
+  user-select: all;
+}
+
+.pair-hint {
+  font-size: 12px;
+  color: #909399;
+}
+</style>

@@ -2,7 +2,38 @@
 
 给**使用平台的人**看的一页说明：怎么在自己电脑上取得 Garmin 令牌，再交给平台完成绑定。
 
-## 为什么不能直接填账号密码
+## 两种方式，推荐第一种
+
+| 方式 | 你要做的事 | 说明 |
+|---|---|---|
+| **桌面助手（推荐）** | 在平台页面上领一个配对码 → 双击运行助手 → 填配对码、Garmin 邮箱、密码 | 助手会自己把令牌交回平台，**你不需要看到或复制令牌** |
+| 手动导入 | 跑脚本取得令牌 → 复制那一整段 JSON → 粘到平台的「导入令牌」 | 助手跑不起来（比如没装 Python）时用这条 |
+
+下面是两种方式的详细步骤。
+
+## 方式一：桌面助手
+
+1. 打开平台的「Garmin 账号」页，点「用桌面助手绑定」，页面上会出现一个 8 位配对码（5 分钟内有效，只能用一次）
+2. 下载助手：[`garmin_pair_helper.py`](../web/public/garmin_pair_helper.py)，或直接在浏览器里打开同名的下载链接
+3. 装一次依赖：
+
+   ```bash
+   pip install garminconnect cloudscraper
+   ```
+
+4. 双击运行助手（或者在它所在目录执行 `python3 garmin_pair_helper.py`），浏览器会自动打开一个本地页面
+5. 在页面里填：配对码、Garmin 登录邮箱、Garmin 密码（开了两步验证会再让你填一次验证码）
+6. 看到「绑定成功」就可以了 —— 回到平台页面，账号已经出现
+
+助手只监听本机（`127.0.0.1`），每次运行都会换一个随机地址；**密码只在本机内存里用于登录 Garmin，不会发给平台**。
+
+如果提示「被 Garmin 拦住了」或「Garmin 正在限流」，说明这个网络刚才登录次数太多了：等 15~30 分钟，或者换一个网络（手机热点常常有效）再试。
+
+## 方式二：手动导入令牌
+
+适合助手跑不起来的情况：在你自己电脑上取得令牌 JSON，再粘贴到平台。
+
+### 为什么不能直接填账号密码
 
 平台的服务器只有一个出口 IP，所有用户共用。Garmin 对登录端点按 IP 限流，还可能弹出
 Cloudflare 人机挑战，在服务器上直接登录容易失败，而且一个人失败会连带其他人一起被限流。
@@ -10,15 +41,15 @@ Cloudflare 人机挑战，在服务器上直接登录容易失败，而且一个
 改成**在你自己电脑上登录**，走的是你熟悉的网络，成功率高得多，而且**密码始终不出本机** ——
 只有登录产生的令牌会交给平台。
 
-## 准备工作
+### 准备工作
 
 - 一台能上网的电脑（Windows / macOS / Linux 都行）
 - 已安装 Python 3.10 或更高版本（终端执行 `python3 --version` 能看到版本号即可）
 - 你的 Garmin 账号和密码
 
-## 步骤
+### 具体步骤
 
-### 1. 安装依赖
+#### 1. 安装依赖
 
 ```bash
 pip install garminconnect cloudscraper
@@ -27,7 +58,7 @@ pip install garminconnect cloudscraper
 `cloudscraper` 用来自动通过 Cloudflare 挑战，建议装上（平台服务器端也是这么做的）；
 没装也能跑，只是遇到人机挑战时更容易失败。
 
-### 2. 运行脚本
+#### 2. 运行脚本
 
 拿到本仓库的 `tools/garmin_token.py`，在它所在目录执行：
 
@@ -47,7 +78,7 @@ python3 garmin_token.py --cn     # 中国区账号（connect.garmin.cn）
 **站点一定要选对**：绝大多数账号是国际站；只有用 connect.garmin.cn 登录的账号才加 `--cn`。
 选错的话后面平台校验令牌会失败。
 
-### 3. 拿到令牌
+#### 3. 拿到令牌
 
 成功时终端长这样：
 
@@ -66,7 +97,7 @@ python3 garmin_token.py --cn     # 中国区账号（connect.garmin.cn）
 
 同时在当前目录生成 `garmin_token.json`（权限 600），从文件里复制更稳妥。
 
-### 4. 在平台上导入
+#### 4. 在平台上导入
 
 打开平台的「Garmin 账号」页 → 点「导入令牌」，填三项：
 
@@ -77,7 +108,7 @@ python3 garmin_token.py --cn     # 中国区账号（connect.garmin.cn）
 平台会先校验令牌是否真的可用，再加密存储。校验通过后账号出现在「已绑定账号」里，
 就可以触发同步了。
 
-## 常见问题
+### 常见问题
 
 **提示「邮箱或密码不正确」**
 密码确实错了，或者两步验证码输错了。重新运行脚本再试。
@@ -97,7 +128,7 @@ Garmin 账号跑一遍本脚本、导入自己的令牌。同一个 Garmin 账�
 平台在同步时会用令牌续期。目前实测一份两天前取得的令牌仍然可用；万一哪天失效，
 按上面的办法重新导入即可，不需要重新绑定账号。
 
-## 安全提醒
+### 安全提醒
 
 - 令牌等同于账号密码。只粘贴到平台自己的页面上，**不要发到群里、不要提交进任何仓库**。
 - 平台用 AES-GCM 加密后存储，页面不会保留你粘贴的内容。
@@ -105,12 +136,26 @@ Garmin 账号跑一遍本脚本、导入自己的令牌。同一个 Garmin 账�
 
 ## 维护者备注
 
-- 脚本：`tools/garmin_token.py`。与采集器 `collector/src/training_plan_collector/garmin_auth.py`
+- **助手（推荐路径）**：`web/public/garmin_pair_helper.py`，由 Vite 原样发布到
+  `<base>/garmin_pair_helper.py`，前端用 `import.meta.env.BASE_URL` 拼下载地址。
+  它只监听 `127.0.0.1`，每次运行生成随机路径前缀（`/<token>/`）作为访问凭据 ——
+  本机 Web 服务如果只靠端口，任何网页都能通过 127.0.0.1 扫端口提交表单。
+  支持 `--token-file` 直接交回已有令牌（不登录 Garmin），便于排障与自动化验证。
+- 平台侧新增：`POST /api/garmin/accounts/pair-code`（需登录，签发一次性配对码）与
+  `POST /api/garmin/accounts/pair`（**免登录**，凭配对码回传令牌）。配对码存 Redis
+  （`garmin:pair:` 前缀、5 分钟、`getAndDelete` 取用即删），定位到的 userId 再走
+  `importToken` 的同一套校验与加密入库。
+  免登录是必须的（助手没有平台登录态），所以 `SecurityConfig` 里**只放行这一个精确路径**，
+  `GarminPairSecurityTest` 会用「其余 `/api/garmin/accounts/**` 必须 401」把通配写法挡住。
+  服务层刻意**先取码再校验令牌**：这个接口匿名可调，若先校验令牌，任何人都能拿它消耗
+  采集器与 Garmin 的调用配额。
+- 手动脚本：`tools/garmin_token.py`。与采集器 `collector/src/training_plan_collector/garmin_auth.py`
   使用同一套调用顺序（先替换 `requests.Session` 为 cloudscraper 会话、再跳过三组慢速
   curl_cffi 登录策略），令牌格式即库的 `client.client.dumps()` 输出。
-- 平台侧：`POST /api/garmin/accounts/import-token`（`ImportTokenRequest`：email / tokenJson /
-  region，region 只接受 `GLOBAL` 或 `CN`）→ 采集器 `/internal/garmin/verify-token` 校验
-  （走 `restore_session`，即 `client.login(tokenstore=...)`）→ 校验通过才 AES-GCM 加密入库。
+- 平台侧手动路径：`POST /api/garmin/accounts/import-token`（`ImportTokenRequest`：email /
+  tokenJson / region，region 只接受 `GLOBAL` 或 `CN`）→ 采集器
+  `/internal/garmin/verify-token` 校验（走 `restore_session`，即
+  `client.login(tokenstore=...)`）→ 校验通过才 AES-GCM 加密入库。
 - 唯一性：`garmin_account` 的唯一键是 `(user_id, garmin_email_hash)`，所以同一用户同一邮箱
   只能绑一次；但**平台不禁止两个平台用户绑定同一个 Garmin 邮箱**，目前也没有数量上限。
 - 尚未验证：同步过程中库内部刷新出的新令牌不会回写数据库，库里存的始终是导入时那份快照。

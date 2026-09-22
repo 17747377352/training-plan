@@ -36,6 +36,7 @@ public enum ErrorCode {
     GARMIN_CONNECT_FAILED(46008, "连接Garmin账号失败"),
     GARMIN_CONNECT_TIMEOUT(46009, "Garmin登录耗时过长已超时，请稍后重试"),
     SYNC_JOB_TIMEOUT(46010, "同步任务超时未完成"),
+    GARMIN_PAIR_CODE_INVALID(46011, "配对码无效或已过期，请在页面上重新获取"),
     AI_SERVICE_ERROR(47001, "AI服务调用失败"),
     AI_TIMEOUT(47002, "AI服务响应超时"),
     AI_NOT_CONFIGURED(47003, "尚未配置 DeepSeek API Key，请在后端配置 DEEPSEEK_API_KEY 后重启服务"),

@@ -8,9 +8,12 @@ import com.trainingplan.platform.dto.garmin.ConnectGarminRequest;
 import com.trainingplan.platform.dto.garmin.GarminAccountDto;
 import com.trainingplan.platform.dto.garmin.GarminConnectResultDto;
 import com.trainingplan.platform.dto.garmin.ImportTokenRequest;
+import com.trainingplan.platform.dto.garmin.PairBindRequest;
+import com.trainingplan.platform.dto.garmin.PairCodeDto;
 import com.trainingplan.platform.dto.garmin.UpdateAutoSyncRequest;
 import com.trainingplan.platform.dto.garmin.TriggerSyncRequest;
 import com.trainingplan.platform.service.GarminAccountService;
+import com.trainingplan.platform.service.GarminPairCodeService;
 import com.trainingplan.platform.service.SyncService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -42,7 +45,37 @@ import java.util.List;
 public class GarminAccountController {
 
     private final GarminAccountService garminAccountService;
+    private final GarminPairCodeService pairCodeService;
     private final SyncService syncService;
+
+    /**
+     * 领取一个一次性配对码，供桌面助手回传令牌时定位当前用户。
+     *
+     * <p>为什么要绕这一圈：Garmin 登录端点按 IP 限流且配额极小，服务器上多用户共用一个
+     * 出口 IP，所以登录只能发生在用户自己的机器上；助手没有平台登录态，用一次性配对码
+     * 比让用户在助手里再登录一次平台体验好得多。</p>
+     *
+     * @param jwt 当前登录令牌
+     * @return 配对码与有效期
+     */
+    @PostMapping("/pair-code")
+    public Result<PairCodeDto> createPairCode(@AuthenticationPrincipal Jwt jwt) {
+        return Result.success(pairCodeService.issue(currentUserId(jwt)));
+    }
+
+    /**
+     * 桌面助手凭配对码回传令牌完成绑定。
+     *
+     * <p>这个接口不带用户令牌，因此已在 {@code SecurityConfig} 里单独放行；
+     * 鉴权凭据就是配对码本身（一次性、5 分钟过期）。</p>
+     *
+     * @param request 配对码绑定请求
+     * @return 绑定后的账号信息
+     */
+    @PostMapping("/pair")
+    public Result<GarminAccountDto> bindByPairCode(@Valid @RequestBody PairBindRequest request) {
+        return Result.success(garminAccountService.bindByPairCode(request));
+    }
 
     /**
      * 查询当前用户已绑定的 Garmin 账号。

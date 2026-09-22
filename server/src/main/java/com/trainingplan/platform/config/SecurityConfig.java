@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -50,6 +51,10 @@ public class SecurityConfig {
                                 "/api/auth/logout")
                         .permitAll()
                         .requestMatchers("/api/system/health", "/actuator/health", "/error").permitAll()
+                        // 桌面助手回传 Garmin 令牌：助手在用户自己机器上运行、没有平台登录态，
+                        // 凭据是请求体里的一次性配对码（由已登录用户在页面上领取）。
+                        // 这里只放行这一个精确路径，其余 /api/garmin/accounts/** 仍需登录。
+                        .requestMatchers(HttpMethod.POST, "/api/garmin/accounts/pair").permitAll()
                         // 内部接口由 CollectorTokenFilter 用服务凭据鉴权，不走用户令牌
                         .requestMatchers("/internal/**").permitAll()
                         .anyRequest().authenticated())

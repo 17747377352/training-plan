@@ -10,6 +10,7 @@ import com.trainingplan.platform.dto.garmin.ConnectGarminRequest;
 import com.trainingplan.platform.dto.garmin.GarminAccountDto;
 import com.trainingplan.platform.dto.garmin.GarminConnectResultDto;
 import com.trainingplan.platform.dto.garmin.ImportTokenRequest;
+import com.trainingplan.platform.dto.garmin.PairBindRequest;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.security.TokenCipher;
@@ -52,6 +53,8 @@ class GarminAccountServiceTest {
     private StringRedisTemplate redisTemplate;
     @Mock
     private ValueOperations<String, String> valueOperations;
+    @Mock
+    private GarminPairCodeService pairCodeService;
 
     private GarminAccountService garminAccountService;
 
@@ -59,7 +62,7 @@ class GarminAccountServiceTest {
     void setUp() {
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         garminAccountService = new GarminAccountServiceImpl(
-                accountMapper, authClient, tokenCipher, redisTemplate);
+                accountMapper, authClient, tokenCipher, redisTemplate, pairCodeService);
     }
 
     @Test
@@ -361,6 +364,46 @@ class GarminAccountServiceTest {
         verify(accountMapper).updateById(captor.capture());
         assertThat(captor.getValue().getTokenCiphertext()).isEqualTo("cipher");
         assertThat(captor.getValue().getAuthStatus()).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void shouldBindToUserResolvedFromPairCode() {
+        when(accountMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+        when(accountMapper.insert(any(GarminAccount.class))).thenAnswer(invocation -> {
+            GarminAccount account = invocation.getArgument(0);
+            account.setId(31L);
+            return 1;
+        });
+        when(authClient.verifyToken("token-json", "GLOBAL"))
+                .thenReturn(new CollectorAuthResult("CONNECTED", null, null, null));
+        when(tokenCipher.encrypt(eq(31L), anyString())).thenReturn("cipher");
+        when(accountMapper.selectById(31L)).thenReturn(activeAccount(31L));
+        // 配对码属于 7 号用户，而请求体里没有任何用户字段可被伪造
+        when(pairCodeService.consume("ABCD2345")).thenReturn(7L);
+
+        garminAccountService.bindByPairCode(
+                new PairBindRequest("ABCD2345", EMAIL, "token-json", "GLOBAL"));
+
+        ArgumentCaptor<GarminAccount> captor = ArgumentCaptor.forClass(GarminAccount.class);
+        verify(accountMapper).insert(captor.capture());
+        assertThat(captor.getValue().getUserId())
+                .as("必须绑定到配对码所属用户，而不是任何请求参数")
+                .isEqualTo(7L);
+    }
+
+    @Test
+    void shouldNotReachCollectorWhenPairCodeIsInvalid() {
+        when(pairCodeService.consume("BADCODE1"))
+                .thenThrow(new BusinessException(ErrorCode.GARMIN_PAIR_CODE_INVALID));
+
+        assertThatThrownBy(() -> garminAccountService.bindByPairCode(
+                new PairBindRequest("BADCODE1", EMAIL, "token-json", "GLOBAL")))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.GARMIN_PAIR_CODE_INVALID);
+
+        // 这个接口是匿名可调的：配对码必须在调用采集器之前就拦住，否则任何人都能拿它
+        // 去消耗采集器与 Garmin 的配额
+        verify(authClient, never()).verifyToken(anyString(), anyString());
     }
 
     @Test

@@ -10,10 +10,12 @@ import com.trainingplan.platform.dto.garmin.ConnectGarminRequest;
 import com.trainingplan.platform.dto.garmin.GarminAccountDto;
 import com.trainingplan.platform.dto.garmin.GarminConnectResultDto;
 import com.trainingplan.platform.dto.garmin.ImportTokenRequest;
+import com.trainingplan.platform.dto.garmin.PairBindRequest;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.security.TokenCipher;
 import com.trainingplan.platform.service.GarminAccountService;
+import com.trainingplan.platform.service.GarminPairCodeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -56,6 +58,7 @@ public class GarminAccountServiceImpl implements GarminAccountService {
     private final GarminAuthClient authClient;
     private final TokenCipher tokenCipher;
     private final StringRedisTemplate redisTemplate;
+    private final GarminPairCodeService pairCodeService;
 
     @Override
     public List<GarminAccountDto> listAccounts(Long userId) {
@@ -162,6 +165,18 @@ public class GarminAccountServiceImpl implements GarminAccountService {
         accountMapper.updateById(update);
         log.info("Garmin 令牌导入成功 garminAccountId={} userId={}", account.getId(), userId);
         return toDto(accountMapper.selectById(account.getId()));
+    }
+
+    @Override
+    public GarminAccountDto bindByPairCode(PairBindRequest request) {
+        // 先取码再校验令牌，顺序不能反：这个接口不需要登录态，如果先校验令牌，
+        // 任何人都能拿它去消耗采集器与 Garmin 的调用配额。配对码一次性且 5 分钟过期，
+        // 把它放在最前面，等于给这条公开路径加了一道凭据闸门。
+        // 代价是令牌无效时配对码也被消耗掉，用户需要重新领码 —— 这是有意的取舍。
+        Long userId = pairCodeService.consume(request.code());
+        log.info("Garmin 配对码校验通过 userId={}", userId);
+        return importToken(userId,
+                new ImportTokenRequest(request.email(), request.tokenJson(), request.region()));
     }
 
     @Override
