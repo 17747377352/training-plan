@@ -68,10 +68,27 @@ class RestGarminAuthClientTest {
     void mapsConnectionFailureToCollectorUnavailable() {
         server.expect(requestTo("http://127.0.0.1:18090/internal/garmin/connect"))
                 .andRespond(withException(new ConnectException("connection refused")));
+        server.expect(requestTo("http://127.0.0.1:18090/internal/garmin/connect"))
+                .andRespond(withException(new ConnectException("connection refused")));
 
         assertThatThrownBy(() -> client.connect("rider@example.com", "secret", "CN"))
                 .isInstanceOf(BusinessException.class)
                 .extracting("errorCode").isEqualTo(ErrorCode.GARMIN_COLLECTOR_UNAVAILABLE);
+        server.verify();
+    }
+
+    @Test
+    void retriesOneTransientConnectionFailure() {
+        server.expect(requestTo("http://127.0.0.1:18090/internal/garmin/connect"))
+                .andRespond(withException(new ConnectException("connection refused")));
+        server.expect(requestTo("http://127.0.0.1:18090/internal/garmin/connect"))
+                .andRespond(withSuccess("{\"status\":\"CONNECTED\",\"tokenJson\":\"{}\"}",
+                        MediaType.APPLICATION_JSON));
+
+        CollectorAuthResult result = client.connect("rider@example.com", "secret", "CN");
+
+        assertThat(result.status()).isEqualTo("CONNECTED");
+        assertThat(result.tokenJson()).isEqualTo("{}");
         server.verify();
     }
 }
