@@ -18,9 +18,26 @@ Garmin 的登录接口按 IP 限流，而且配额很小（实测一次成功登
 
 用法
 ----
-    pip install garminconnect cloudscraper
-    python garmin_pair_helper.py                # 绑定到线上平台
-    python garmin_pair_helper.py --server http://127.0.0.1:8099   # 绑定到本地后端
+macOS / Linux（任意 Python 3.10+，不会污染系统环境）：
+
+    python3 -m venv .venv && .venv/bin/pip install -q garminconnect cloudscraper
+    .venv/bin/python garmin_pair_helper.py            # 绑定到线上平台
+    .venv/bin/python garmin_pair_helper.py --server http://127.0.0.1:8099   # 本地后端
+
+Windows（PowerShell / cmd）：
+
+    python -m venv .venv
+    .venv\\Scripts\\pip install garminconnect cloudscraper
+    .venv\\Scripts\\python garmin_pair_helper.py
+
+装了 uv 的话一条命令就够：
+
+    uv run --python 3.12 --with garminconnect --with cloudscraper python garmin_pair_helper.py
+
+注意：macOS 上 Homebrew / 系统自带的 Python 直接 `pip install` 会被 PEP 668 拦下并报
+`externally-managed-environment` —— 那不是缺东西，是系统不允许往全局环境装包，
+用上面的 venv 方式即可。cloudscraper 用于自动通过 Cloudflare 挑战（平台采集器也是这么做的），
+没装也能跑，只是遇到人机挑战时更容易失败。
 """
 
 from __future__ import annotations
@@ -38,6 +55,25 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DEFAULT_SERVER = "https://songtop.xyz/planapi"
+
+DEPENDENCY_HINT = """
+缺少依赖 garminconnect / cloudscraper。
+
+  macOS / Linux（任意 Python 3.10+，不需要动系统环境）：
+      python3 -m venv .venv && .venv/bin/pip install -q garminconnect cloudscraper
+      .venv/bin/python garmin_pair_helper.py
+
+  Windows（PowerShell / cmd）：
+      python -m venv .venv
+      .venv\\Scripts\\pip install garminconnect cloudscraper
+      .venv\\Scripts\\python garmin_pair_helper.py
+
+  装了 uv 的话一条命令就够：
+      uv run --python 3.12 --with garminconnect --with cloudscraper python garmin_pair_helper.py
+
+提示：macOS 上直接 pip install 会报 externally-managed-environment（PEP 668），
+      这是系统在保护全局环境，用上面的 venv 方式即可。
+""".rstrip()
 
 # 0.3.16 的登录链会先跑三组 curl_cffi 指纹策略，每种网络超时 30 秒。启用
 # cloudscraper 会话后这两组 requests 策略已经能解 Cloudflare 挑战，跳过 cffi
@@ -387,7 +423,7 @@ def main() -> int:
         import garminconnect  # noqa: F401 - 只做依赖检查
     except ImportError:
         if not args.token_file:
-            print("缺少依赖：请先执行  pip install garminconnect cloudscraper", file=sys.stderr)
+            print(DEPENDENCY_HINT, file=sys.stderr)
             return 2
 
     STATE["server"] = args.server.rstrip("/")

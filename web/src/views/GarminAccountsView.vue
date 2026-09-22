@@ -639,8 +639,19 @@ onMounted(loadAccounts);
           <a :href="PAIR_HELPER_URL" :download="PAIR_HELPER_FILE">{{
             PAIR_HELPER_FILE
           }}</a>
-          （需要电脑上装了 Python 3.10+，然后
-          <code>pip install garminconnect cloudscraper</code>）
+          ，在它所在目录执行（需要 Python 3.10+；依赖装在临时环境里，
+          不会动你的系统 Python）
+          <pre class="pair-cmd">python3 -m venv .venv && .venv/bin/pip install -q garminconnect cloudscraper
+.venv/bin/python garmin_pair_helper.py</pre>
+          <span class="pair-hint"
+            >Windows 把路径换成 <code>.venv\Scripts\pip</code> 与
+            <code>.venv\Scripts\python</code>；macOS 上直接 <code>pip install</code>
+            会报 externally-managed-environment，用上面这两行即可。装了 uv
+            的话一条就够：<code
+              >uv run --python 3.12 --with garminconnect --with cloudscraper python
+              garmin_pair_helper.py</code
+            ></span
+          >
         </li>
         <li>
           双击运行它，把下面这个配对码填进去
@@ -706,5 +717,19 @@ onMounted(loadAccounts);
 .pair-hint {
   font-size: 12px;
   color: #909399;
+}
+
+/* 给终端用户直接可复制的命令块：他们看不到仓库里的文档 */
+.pair-cmd {
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  background: #f4f4f5;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
 }
 </style>

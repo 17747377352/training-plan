@@ -15,13 +15,34 @@
 
 1. 打开平台的「Garmin 账号」页，点「用桌面助手绑定」，页面上会出现一个 8 位配对码（5 分钟内有效，只能用一次）
 2. 下载助手：[`garmin_pair_helper.py`](../web/public/garmin_pair_helper.py)，或直接在浏览器里打开同名的下载链接
-3. 装一次依赖：
+3. 在助手所在目录跑起来。**依赖装在临时环境里，不会动你的系统 Python**：
+
+   macOS / Linux（需要 Python 3.10+）：
 
    ```bash
-   pip install garminconnect cloudscraper
+   python3 -m venv .venv && .venv/bin/pip install -q garminconnect cloudscraper
+   .venv/bin/python garmin_pair_helper.py
    ```
 
-4. 双击运行助手（或者在它所在目录执行 `python3 garmin_pair_helper.py`），浏览器会自动打开一个本地页面
+   Windows（PowerShell / cmd）：
+
+   ```bat
+   python -m venv .venv
+   .venv\Scripts\pip install garminconnect cloudscraper
+   .venv\Scripts\python garmin_pair_helper.py
+   ```
+
+   已经装了 [uv](https://docs.astral.sh/uv/) 的话一条命令就够：
+
+   ```bash
+   uv run --python 3.12 --with garminconnect --with cloudscraper python garmin_pair_helper.py
+   ```
+
+   > **不要在 macOS 上直接 `pip install`**：Homebrew / 系统自带的 Python 有 PEP 668 保护，
+   > 会报 `externally-managed-environment`。那不是缺东西，是系统不允许往全局环境装包，
+   > 用上面的 venv 方式即可（助手本身在缺依赖时也会把这几条命令打印出来）。
+
+4. 助手会自动打开浏览器（没打开的话，看终端里打印的本机地址，手动访问它）
 5. 在页面里填：配对码、Garmin 登录邮箱、Garmin 密码（开了两步验证会再让你填一次验证码）
 6. 看到「绑定成功」就可以了 —— 回到平台页面，账号已经出现
 
@@ -51,9 +72,15 @@ Cloudflare 人机挑战，在服务器上直接登录容易失败，而且一个
 
 #### 1. 安装依赖
 
+**不要直接 `pip install`** —— macOS 上 Homebrew / 系统自带的 Python 会以 PEP 668 拒绝
+（报 `externally-managed-environment`），而往全局环境硬装会污染系统 Python。用临时环境：
+
 ```bash
-pip install garminconnect cloudscraper
+python3 -m venv .venv
+.venv/bin/pip install garminconnect cloudscraper
 ```
+
+Windows 把第二行换成 `.venv\Scripts\pip install garminconnect cloudscraper`。
 
 `cloudscraper` 用来自动通过 Cloudflare 挑战，建议装上（平台服务器端也是这么做的）；
 没装也能跑，只是遇到人机挑战时更容易失败。
@@ -115,7 +142,11 @@ python3 garmin_token.py --cn     # 中国区账号（connect.garmin.cn）
 
 **提示「Garmin 正在限流」或「网络被 Garmin 拦住」**
 多为 IP 被限流或 Cloudflare 人机挑战。处理办法：等 15~30 分钟再试；换一个网络
-（手机热点常常有效）；确认已经 `pip install cloudscraper`。
+（手机热点常常有效）；确认 `cloudscraper` 已装好（见「安装依赖」，用 venv 装）。
+
+**运行时报 `externally-managed-environment`**
+这是 macOS 上 Homebrew / 系统 Python 的 PEP 668 保护，不是缺依赖。按「安装依赖」
+改用 venv（或 `uv run --with ...`）即可，不要加 `--break-system-packages` 硬装。
 
 **平台提示「Garmin 令牌已失效」**
 令牌过期或被 Garmin 作废。重新跑一次本脚本，把新令牌再导入一次即可。
