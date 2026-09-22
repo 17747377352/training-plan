@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import logging
 import pathlib
 import secrets
 import sys
@@ -225,6 +226,38 @@ def enable_cloudscraper() -> bool:
     return True
 
 
+def _redact(text: str, secret: str) -> str:
+    """万一库的日志里出现密码，替换掉再展示。"""
+
+    return text.replace(secret, "***") if secret else text
+
+
+class StrategyLogCollector(logging.Handler):
+    """收集 garminconnect 的分段失败原因。
+
+    库的 login() 会依次尝试多段策略，但最终只抛出**最后一段**的错误。只报「Portal login:
+    HTTP 403」会让人以为是单纯的 Cloudflare 拦截，而真正的原因可能是前面那段被 429 限流 ——
+    这两种情况的处理方式完全不同（前者换网络，后者等一会儿）。所以这里把每段的原因都留下。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            message = record.getMessage()
+        except Exception:  # noqa: BLE001 - 日志格式化失败不应该影响登录流程
+            return
+        if record.levelno >= logging.WARNING or "strategy" in message.lower():
+            self.lines.append(f"{record.levelname}: {message}")
+
+    def drain(self) -> str:
+        text = "\n".join(self.lines)
+        self.lines.clear()
+        return text
+
+
 def start_login(email: str, password: str, region: str):
     """发起一次 Garmin 登录。
 
@@ -245,17 +278,35 @@ def start_login(email: str, password: str, region: str):
     if hasattr(client.client, "skip_strategies"):
         client.client.skip_strategies.update(SLOW_CFFI_STRATEGIES)
 
+    collector = StrategyLogCollector()
+    library_logger = logging.getLogger("garminconnect")
+    previous_level = library_logger.level
+    library_logger.setLevel(logging.DEBUG)
+    library_logger.addHandler(collector)
+
+    def describe(details: str) -> str:
+        detail_text = _redact(details.strip(), password)
+        return f"\n\n各段策略的实际结果：\n{detail_text}" if detail_text else ""
+
     try:
         needs_mfa, client_state = client.login()
     except GarminConnectAuthenticationError:
-        return "error", "Garmin 邮箱或密码不正确。"
+        return "error", "Garmin 邮箱或密码不正确。" + describe(collector.drain())
     except GarminConnectTooManyRequestsError:
-        return "error", ("Garmin 正在限流这个网络，请等 15~30 分钟再试，"
-                         "或换一个网络（手机热点）后重试。")
+        return "error", ("Garmin 正在限流这个网络：等 15~30 分钟再试，"
+                         "或换一个网络（手机热点常常有效）。" + describe(collector.drain()))
     except GarminConnectConnectionError as exception:
-        return "error", (f"被 Garmin 拦住了（多为人机验证或 IP 限流）：{str(exception)[:160]}")
+        return "error", (
+            "被 Garmin 拦住了。两种情况最常见：这个网络最近登录次数过多（等一会儿再试），"
+            "或者网络出口被 Cloudflare 挑战（换手机热点试试）。"
+            + describe(collector.drain() or str(exception))
+        )
     except Exception as exception:  # noqa: BLE001 - 失败原因要原样告诉用户
-        return "error", f"登录失败：{type(exception).__name__}: {str(exception)[:200]}"
+        return "error", (f"登录失败：{type(exception).__name__}: {str(exception)[:200]}"
+                         + describe(collector.drain()))
+    finally:
+        library_logger.removeHandler(collector)
+        library_logger.setLevel(previous_level)
 
     if needs_mfa:
         STATE["pending_client"] = client
