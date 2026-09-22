@@ -32,8 +32,13 @@ class RestDeepSeekClientTest {
         server = MockRestServiceServer.bindTo(builder).build();
         // 保留测试服务器的请求工厂，禁止测试带假密钥访问真实 DeepSeek。
         org.mockito.Mockito.doReturn(builder).when(builder).requestFactory(org.mockito.ArgumentMatchers.any());
-        client = new RestDeepSeekClient(builder, new DeepSeekProperties("https://api.deepseek.com", "unit-test-key", "deepseek-flash", Duration.ofSeconds(90)));
+        client = new RestDeepSeekClient(builder, new DeepSeekProperties("https://api.deepseek.com", "unit-test-key", "deepseek-flash", Duration.ofSeconds(90), 8));
     }
+
+    /** 带 usage 的正常响应，单独成常量以免嵌套引号难以阅读。 */
+    private static final String REPLY_WITH_USAGE = "{\"choices\":[{\"finish_reason\":\"stop\","
+            + "\"message\":{\"content\":\"{\\\"title\\\":\\\"恢复骑\\\"}\"}}],"
+            + "\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":300,\"total_tokens\":1500}}";
 
     @Test
     void postsConfiguredModelAndUserMetricsWithoutLosingJsonMode() {
@@ -45,8 +50,15 @@ class RestDeepSeekClientTest {
                 .andExpect(jsonPath("$.stream").value(false))
                 .andExpect(jsonPath("$.messages[0].role").value("system"))
                 .andExpect(jsonPath("$.messages[1].content").value("{\"currentFtpWatts\":213}"))
-                .andRespond(withSuccess("{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"{\\\"title\\\":\\\"恢复骑\\\"}\"}}]}", MediaType.APPLICATION_JSON));
-        assertThat(client.generate("返回 JSON", json.createObjectNode().put("currentFtpWatts", 213))).contains("恢复骑");
+                .andRespond(withSuccess(REPLY_WITH_USAGE, MediaType.APPLICATION_JSON));
+        var result = client.generate("返回 JSON", json.createObjectNode().put("currentFtpWatts", 213));
+        assertThat(result.content()).contains("恢复骑");
+        // 阶段七要求记录 Token 用量与耗时
+        assertThat(result.promptTokens()).isEqualTo(1200);
+        assertThat(result.completionTokens()).isEqualTo(300);
+        assertThat(result.totalTokens()).isEqualTo(1500);
+        assertThat(result.httpStatus()).isEqualTo(200);
+        assertThat(result.elapsedMillis()).isNotNegative();
         server.verify();
     }
 
@@ -64,7 +76,7 @@ class RestDeepSeekClientTest {
     @Test
     void missingKeyDoesNotMakeNetworkRequest() {
         RestDeepSeekClient unconfigured = new RestDeepSeekClient(RestClient.builder(),
-                new DeepSeekProperties("https://api.deepseek.com", "", "deepseek-flash", Duration.ofSeconds(90)));
+                new DeepSeekProperties("https://api.deepseek.com", "", "deepseek-flash", Duration.ofSeconds(90), 8));
         assertThatThrownBy(() -> unconfigured.generate("json", json.createObjectNode()))
                 .extracting("errorCode").isEqualTo(ErrorCode.AI_NOT_CONFIGURED);
     }

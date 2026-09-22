@@ -11,9 +11,10 @@ public interface TrainingPlanService {
      * 生成当天的训练计划并落库；同一天重复生成即覆盖。
      *
      * @param userId 当前登录用户 ID
+     * @param force  true 表示忽略数据指纹强制重新调用模型（会消耗配额）
      * @return 生成结果
      */
-    GeneratedTrainingPlanDto generate(Long userId);
+    GeneratedTrainingPlanDto generate(Long userId, boolean force);
 
     /**
      * 读取已保存的计划，用于页面刷新后恢复，避免每次加载都调用付费接口。

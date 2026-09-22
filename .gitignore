@@ -10,6 +10,7 @@ server/.classpath
 server/.project
 server/.settings/
 server/src/main/resources/application-dev.yml
+server/src/main/resources/application-prod.yml
 
 # Vue
 web/node_modules/

@@ -6,6 +6,7 @@ import com.trainingplan.platform.common.exception.BusinessException;
 import com.trainingplan.platform.config.DeepSeekProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -34,12 +35,13 @@ public class RestDeepSeekClient implements DeepSeekClient {
     }
 
     @Override
-    public String generate(String systemPrompt, JsonNode context) {
+    public DeepSeekResult generate(String systemPrompt, JsonNode context) {
         if (!StringUtils.hasText(properties.apiKey())) {
             throw new BusinessException(ErrorCode.AI_NOT_CONFIGURED);
         }
+        long startedAt = System.nanoTime();
         try {
-            JsonNode response = client.post().uri("/chat/completions")
+            ResponseEntity<JsonNode> entity = client.post().uri("/chat/completions")
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + properties.apiKey())
                     .body(Map.of("model", properties.model(), "stream", false,
                             "max_tokens", 2400, "temperature", 0.3,
@@ -47,7 +49,8 @@ public class RestDeepSeekClient implements DeepSeekClient {
                             "response_format", Map.of("type", "json_object"),
                             "messages", List.of(Map.of("role", "system", "content", systemPrompt),
                                     Map.of("role", "user", "content", context.toString()))))
-                    .retrieve().body(JsonNode.class);
+                    .retrieve().toEntity(JsonNode.class);
+            JsonNode response = entity.getBody();
             JsonNode choice = response == null ? null : response.path("choices").path(0);
             if (choice == null || !"stop".equals(choice.path("finish_reason").asText())) {
                 throw new BusinessException(ErrorCode.AI_INVALID_RESPONSE);
@@ -56,7 +59,14 @@ public class RestDeepSeekClient implements DeepSeekClient {
             if (!StringUtils.hasText(content) || content.length() > 24000) {
                 throw new BusinessException(ErrorCode.AI_INVALID_RESPONSE);
             }
-            return content;
+            // Token 用量按阶段七要求记录；供应商缺字段时留空而不是记 0
+            JsonNode usage = response.path("usage");
+            return new DeepSeekResult(content,
+                    intOrNull(usage, "prompt_tokens"),
+                    intOrNull(usage, "completion_tokens"),
+                    intOrNull(usage, "total_tokens"),
+                    (System.nanoTime() - startedAt) / 1_000_000,
+                    entity.getStatusCode().value());
         } catch (ResourceAccessException exception) {
             throw new BusinessException(ErrorCode.AI_TIMEOUT);
         } catch (RestClientResponseException exception) {
@@ -68,5 +78,17 @@ public class RestDeepSeekClient implements DeepSeekClient {
         } catch (RestClientException exception) {
             throw new BusinessException(ErrorCode.AI_SERVICE_ERROR);
         }
+    }
+
+    /**
+     * 取整数用量字段。
+     *
+     * @param usage 用量节点
+     * @param field 字段名
+     * @return 数值，缺失时为 null
+     */
+    private Integer intOrNull(JsonNode usage, String field) {
+        JsonNode value = usage.path(field);
+        return value.isIntegralNumber() ? value.intValue() : null;
     }
 }

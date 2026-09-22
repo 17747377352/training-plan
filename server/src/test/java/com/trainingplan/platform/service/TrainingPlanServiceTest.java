@@ -6,10 +6,12 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trainingplan.platform.client.DeepSeekClient;
 import com.trainingplan.platform.common.error.ErrorCode;
+import com.trainingplan.platform.common.exception.BusinessException;
 import com.trainingplan.platform.config.DeepSeekProperties;
 import com.trainingplan.platform.dto.training.GeneratedTrainingPlanDto;
 import com.trainingplan.platform.dto.training.TrainingAdviceDto;
 import com.trainingplan.platform.entity.TrainingPlan;
+import com.trainingplan.platform.client.DeepSeekResult;
 import com.trainingplan.platform.mapper.TrainingPlanMapper;
 import com.trainingplan.platform.service.impl.TrainingPlanServiceImpl;
 import com.trainingplan.platform.service.training.TrainingAdviceEngine;
@@ -30,6 +32,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.*;
 
@@ -40,6 +43,7 @@ class TrainingPlanServiceTest {
     @Mock private TrainingPlanContextBuilder contexts;
     @Mock private DeepSeekClient client;
     @Mock private TrainingPlanMapper planMapper;
+    @Mock private AiUsageService aiUsage;
     @Mock private UserService userService;
     private final ObjectMapper json = new ObjectMapper();
     private TrainingPlanService service;
@@ -61,15 +65,15 @@ class TrainingPlanServiceTest {
         lenient().when(adviceService.getAdvice(7L, null)).thenReturn(advice);
         lenient().when(contexts.build(7L, advice)).thenAnswer(i -> context);
         service = new TrainingPlanServiceImpl(adviceService, contexts, client,
-                new DeepSeekProperties("https://api.deepseek.com", "test-key", "deepseek-flash", Duration.ofSeconds(90)),
-                json, planMapper, userService);
+                new DeepSeekProperties("https://api.deepseek.com", "test-key", "deepseek-flash", Duration.ofSeconds(90), 0),
+                json, planMapper, userService, aiUsage);
         lenient().when(planMapper.selectOne(any(Wrapper.class))).thenReturn(null);
     }
 
     @Test
     void returnsModelContentAndServerComputedPowerWithProvenance() {
-        when(client.generate(anyString(), eq(context.payload()))).thenReturn(VALID);
-        var result = service.generate(7L);
+        when(client.generate(anyString(), eq(context.payload()))).thenReturn(result(VALID));
+        var result = service.generate(7L, false);
         assertThat(result.provider()).isEqualTo("DeepSeek");
         assertThat(result.model()).isEqualTo("deepseek-flash");
         assertThat(result.dataSummary()).isEqualTo("test data summary");
@@ -95,31 +99,35 @@ class TrainingPlanServiceTest {
             case "noSteps" -> node.remove("steps");
             case "overflow" -> step.put("minutes", Long.MAX_VALUE);
         }
-        when(client.generate(anyString(), any())).thenReturn(mutation.equals("malformed") ? "not json" : node.toString());
-        assertThatThrownBy(() -> service.generate(7L)).extracting("errorCode").isEqualTo(ErrorCode.AI_INVALID_RESPONSE);
+        when(client.generate(anyString(), any())).thenReturn(result(mutation.equals("malformed") ? "not json" : node.toString()));
+        assertThatThrownBy(() -> service.generate(7L, false)).extracting("errorCode").isEqualTo(ErrorCode.AI_INVALID_RESPONSE);
+        // 校验不通过也要计一次真实调用：请求已经发出去，可能已经产生费用。
+        // 这条断言最初漏了，变异测试发现「删掉校验失败分支的记账」不会让用例失败。
+        verify(aiUsage).recordFailure(7L, advice.calendarDate(),
+                TrainingPlanServiceImpl.PROMPT_VERSION, "deepseek-flash", "AI_INVALID_RESPONSE");
     }
 
     @Test
     void redDayRejectsExerciseAndAcceptsRest() {
         context = new TrainingPlanContextBuilder.Context(json.createObjectNode(), 213, 0, 0, "rest");
-        when(client.generate(anyString(), any())).thenReturn(VALID, "{\"title\":\"休息\",\"rationale\":\"恢复不足\",\"adjustment\":\"明日重评\",\"steps\":[]}");
-        assertThatThrownBy(() -> service.generate(7L)).extracting("errorCode").isEqualTo(ErrorCode.AI_INVALID_RESPONSE);
-        assertThat(service.generate(7L).prescription().type()).isEqualTo("REST");
+        when(client.generate(anyString(), any())).thenReturn(result(VALID), result("{\"title\":\"休息\",\"rationale\":\"恢复不足\",\"adjustment\":\"明日重评\",\"steps\":[]}"));
+        assertThatThrownBy(() -> service.generate(7L, false)).extracting("errorCode").isEqualTo(ErrorCode.AI_INVALID_RESPONSE);
+        assertThat(service.generate(7L, false).prescription().type()).isEqualTo("REST");
     }
 
     @Test
     void noValidFtpMeansNoFabricatedWatts() {
         context = new TrainingPlanContextBuilder.Context(json.createObjectNode(), null, 20, 50, "no ftp");
-        when(client.generate(anyString(), any())).thenReturn(VALID);
-        assertThat(service.generate(7L).prescription().steps().get(0).powerMaxWatts()).isNull();
+        when(client.generate(anyString(), any())).thenReturn(result(VALID));
+        assertThat(service.generate(7L, false).prescription().steps().get(0).powerMaxWatts()).isNull();
     }
 
     @Test
     @SuppressWarnings("unchecked")
     void persistsGeneratedPlanUnderJwtUser() {
-        when(client.generate(anyString(), eq(context.payload()))).thenReturn(VALID);
+        when(client.generate(anyString(), eq(context.payload()))).thenReturn(result(VALID));
 
-        service.generate(7L);
+        service.generate(7L, false);
 
         ArgumentCaptor<TrainingPlan> captor = ArgumentCaptor.forClass(TrainingPlan.class);
         verify(planMapper).insert(captor.capture());
@@ -143,9 +151,9 @@ class TrainingPlanServiceTest {
         existing.setId(5L);
         existing.setUserId(7L);
         when(planMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
-        when(client.generate(anyString(), eq(context.payload()))).thenReturn(VALID);
+        when(client.generate(anyString(), eq(context.payload()))).thenReturn(result(VALID));
 
-        service.generate(7L);
+        service.generate(7L, false);
 
         verify(planMapper).updateById(any(TrainingPlan.class));
         verify(planMapper, never()).insert(any(TrainingPlan.class));
@@ -237,5 +245,117 @@ class TrainingPlanServiceTest {
         // 分段坏了也要能显示名称与依据，而不是整页 500
         assertThat(result.prescription().title()).isEqualTo("有氧");
         assertThat(result.prescription().steps()).isEmpty();
+    }
+
+    private static DeepSeekResult result(String content) {
+        return new DeepSeekResult(content, 1200, 300, 1500, 2400L, 200);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void reusesStoredPlanWhenDataUnchangedAndSkipsPaidCall() {
+        TrainingPlan stored = new TrainingPlan();
+        stored.setCalendarDate(advice.calendarDate());
+        stored.setLight(advice.light().name());
+        stored.setPlanType("RECOVERY");
+        stored.setTitle("已存计划");
+        stored.setDataFingerprint(fingerprintOf(context));
+        when(planMapper.selectOne(any(Wrapper.class))).thenReturn(stored);
+
+        GeneratedTrainingPlanDto result = service.generate(7L, false);
+
+        assertThat(result.reused()).isTrue();
+        assertThat(result.prescription().title()).isEqualTo("已存计划");
+        // 数据没变就不能再花钱
+        verify(client, never()).generate(anyString(), any());
+        verify(aiUsage).recordReuse(7L, advice.calendarDate(), TrainingPlanServiceImpl.PROMPT_VERSION);
+        // 复用不消耗配额，所以连配额校验都不该做
+        verify(aiUsage, never()).requireQuota(any(), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void regeneratesWhenFingerprintChanged() {
+        TrainingPlan stored = new TrainingPlan();
+        stored.setCalendarDate(advice.calendarDate());
+        stored.setLight(advice.light().name());
+        stored.setPlanType("RECOVERY");
+        stored.setTitle("旧计划");
+        stored.setDataFingerprint("00000000000000000000000000000000");
+        when(planMapper.selectOne(any(Wrapper.class))).thenReturn(stored);
+        when(client.generate(anyString(), eq(context.payload()))).thenReturn(result(VALID));
+
+        GeneratedTrainingPlanDto result = service.generate(7L, false);
+
+        assertThat(result.reused()).isFalse();
+        assertThat(result.prescription().title()).isEqualTo("轻松骑");
+        verify(aiUsage).requireQuota(7L, advice.calendarDate());
+        verify(aiUsage).recordSuccess(eq(7L), eq(advice.calendarDate()),
+                eq(TrainingPlanServiceImpl.PROMPT_VERSION), eq("deepseek-flash"), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void forceIgnoresStoredFingerprint() {
+        TrainingPlan stored = new TrainingPlan();
+        stored.setCalendarDate(advice.calendarDate());
+        stored.setLight(advice.light().name());
+        stored.setPlanType("RECOVERY");
+        stored.setTitle("已存计划");
+        stored.setDataFingerprint(fingerprintOf(context));
+        when(planMapper.selectOne(any(Wrapper.class))).thenReturn(stored);
+        when(client.generate(anyString(), eq(context.payload()))).thenReturn(result(VALID));
+
+        GeneratedTrainingPlanDto result = service.generate(7L, true);
+
+        assertThat(result.reused()).isFalse();
+        verify(client).generate(anyString(), any());
+    }
+
+    @Test
+    void quotaExceededStopsBeforeCallingModelAndIsNotDoubleCounted() {
+        when(planMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+        doThrow(new BusinessException(ErrorCode.AI_QUOTA_EXCEEDED))
+                .when(aiUsage).requireQuota(7L, advice.calendarDate());
+
+        assertThatThrownBy(() -> service.generate(7L, false))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(ErrorCode.AI_QUOTA_EXCEEDED);
+
+        verify(client, never()).generate(anyString(), any());
+        // 被配额拦下说明请求没发出去，不能再记一次失败
+        verify(aiUsage, never()).recordFailure(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void validationFailureStillCountsAsOnePaidCall() {
+        when(planMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+        when(client.generate(anyString(), any())).thenReturn(result("not json"));
+
+        assertThatThrownBy(() -> service.generate(7L, false))
+                .extracting("errorCode").isEqualTo(ErrorCode.AI_INVALID_RESPONSE);
+
+        // 请求已经发出去、可能已经产生费用，所以必须计一次
+        verify(aiUsage).recordFailure(7L, advice.calendarDate(),
+                TrainingPlanServiceImpl.PROMPT_VERSION, "deepseek-flash", "AI_INVALID_RESPONSE");
+    }
+
+    @Test
+    void clientFailureIsRecordedWithItsOwnErrorCode() {
+        when(planMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+        when(client.generate(anyString(), any()))
+                .thenThrow(new BusinessException(ErrorCode.AI_TIMEOUT));
+
+        assertThatThrownBy(() -> service.generate(7L, false))
+                .extracting("errorCode").isEqualTo(ErrorCode.AI_TIMEOUT);
+
+        verify(aiUsage).recordFailure(7L, advice.calendarDate(),
+                TrainingPlanServiceImpl.PROMPT_VERSION, "deepseek-flash", "AI_TIMEOUT");
+    }
+
+    private static String fingerprintOf(TrainingPlanContextBuilder.Context context) {
+        return org.springframework.util.DigestUtils.md5DigestAsHex(
+                context.payload().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 }

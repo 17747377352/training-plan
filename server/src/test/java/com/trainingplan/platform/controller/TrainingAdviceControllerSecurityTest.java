@@ -6,6 +6,7 @@ import com.trainingplan.platform.service.TrainingPlanService;
 import com.trainingplan.platform.security.CollectorTokenFilter;
 import com.trainingplan.platform.security.RestAccessDeniedHandler;
 import com.trainingplan.platform.security.RestAuthenticationEntryPoint;
+import com.trainingplan.platform.service.AiUsageService;
 import com.trainingplan.platform.service.TrainingAdviceService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -55,6 +56,7 @@ class TrainingAdviceControllerSecurityTest {
     @Autowired private MockMvc mockMvc;
     @MockitoBean private TrainingAdviceService adviceService;
     @MockitoBean private TrainingPlanService planService;
+    @MockitoBean private AiUsageService aiUsageService;
 
     @Test
     void anonymousCannotReadAdvice() throws Exception {
@@ -85,7 +87,7 @@ class TrainingAdviceControllerSecurityTest {
                 .andExpect(status().isUnauthorized());
         mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/training-plans/generate?userId=999")
                 .with(authentication(userAuthentication("7")))).andExpect(status().isOk());
-        verify(planService).generate(7L);
+        verify(planService).generate(7L, false);
     }
 
     private JwtAuthenticationToken userAuthentication(String subject) {

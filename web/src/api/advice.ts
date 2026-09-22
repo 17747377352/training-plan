@@ -46,6 +46,17 @@ export function getTrainingAdvice(): Promise<TrainingAdvice> {
   return request({ method: "GET", url: "/api/training-advice" });
 }
 
+export interface AiUsage {
+  calendarDate: string;
+  limitPerDay: number;
+  usedToday: number;
+  remainingToday: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  reusedToday: number;
+}
+
 export interface GeneratedTrainingPlan {
   calendarDate: string;
   generatedAt: string;
@@ -57,15 +68,30 @@ export interface GeneratedTrainingPlan {
   light: TrainingAdvice["light"];
   rationale: string;
   prescription: TrainingAdvice["prescription"];
+  /** 数据指纹未变，直接返回了已存计划而没有调用模型（不消耗配额）。 */
+  reused: boolean;
+  usage?: AiUsage | null;
 }
 
-/** 用户点击后才发送生成请求；等待时间覆盖服务端的 90 秒模型读取超时。 */
-export function generateTrainingPlan(): Promise<GeneratedTrainingPlan> {
+/**
+ * 用户点击后才发送生成请求；等待时间覆盖服务端的 90 秒模型读取超时。
+ *
+ * @param force true 表示忽略数据指纹强制重新调用模型（会消耗配额）
+ */
+export function generateTrainingPlan(
+  force = false,
+): Promise<GeneratedTrainingPlan> {
   return request({
     method: "POST",
     url: "/api/training-plans/generate",
+    params: { force },
     timeout: 120_000,
   });
+}
+
+/** 当日 AI 用量与剩余配额。 */
+export function getAiUsage(): Promise<AiUsage> {
+  return request({ method: "GET", url: "/api/training-plans/usage" });
 }
 
 /**

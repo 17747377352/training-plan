@@ -40,6 +40,7 @@ public enum ErrorCode {
     AI_NOT_CONFIGURED(47003, "尚未配置 DeepSeek API Key，请在后端配置 DEEPSEEK_API_KEY 后重启服务"),
     AI_AUTH_ERROR(47004, "DeepSeek 鉴权失败，请检查后端 API Key"),
     AI_RATE_LIMITED(47005, "DeepSeek 请求过于频繁，请稍后手动重试"),
+    AI_QUOTA_EXCEEDED(47007, "今日 AI 生成次数已用完，请明天再试"),
     AI_INVALID_RESPONSE(47006, "DeepSeek 返回的训练计划不完整或不符合当前恢复限制，请重新生成"),
     SYSTEM_ERROR(50000, "系统暂时不可用");
 

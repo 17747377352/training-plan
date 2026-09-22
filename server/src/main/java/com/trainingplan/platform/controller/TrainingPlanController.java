@@ -3,7 +3,9 @@ package com.trainingplan.platform.controller;
 import com.trainingplan.platform.common.api.Result;
 import com.trainingplan.platform.common.error.ErrorCode;
 import com.trainingplan.platform.common.exception.BusinessException;
+import com.trainingplan.platform.dto.training.AiUsageDto;
 import com.trainingplan.platform.dto.training.GeneratedTrainingPlanDto;
+import com.trainingplan.platform.service.AiUsageService;
 import com.trainingplan.platform.service.TrainingPlanService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -19,10 +21,34 @@ import java.time.LocalDate;
 @RequiredArgsConstructor
 public class TrainingPlanController {
     private final TrainingPlanService service;
+    private final AiUsageService aiUsageService;
 
+    /**
+     * 生成当天的训练计划。
+     *
+     * <p>默认按数据指纹复用：指标没变时直接返回已存计划，不调用模型、不消耗配额。
+     * 需要换一版时传 {@code force=true}。</p>
+     *
+     * @param force 是否强制重新调用模型
+     * @param jwt   当前登录令牌
+     * @return 生成结果（含当日用量）
+     */
     @PostMapping("/generate")
-    public Result<GeneratedTrainingPlanDto> generate(@AuthenticationPrincipal Jwt jwt) {
-        return Result.success(service.generate(currentUserId(jwt)));
+    public Result<GeneratedTrainingPlanDto> generate(
+            @RequestParam(defaultValue = "false") boolean force,
+            @AuthenticationPrincipal Jwt jwt) {
+        return Result.success(service.generate(currentUserId(jwt), force));
+    }
+
+    /**
+     * 查询当日 AI 用量与剩余配额。
+     *
+     * @param jwt 当前登录令牌
+     * @return 用量与配额
+     */
+    @GetMapping("/usage")
+    public Result<AiUsageDto> usage(@AuthenticationPrincipal Jwt jwt) {
+        return Result.success(aiUsageService.usage(currentUserId(jwt), null));
     }
 
     /**

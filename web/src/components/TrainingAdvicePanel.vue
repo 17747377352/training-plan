@@ -3,9 +3,11 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { listCheckins, saveCheckin } from "../api/checkins";
 import { getTrainingGoal } from "../api/goals";
 import {
+  getAiUsage,
   getTrainingAdvice,
   getStoredTrainingPlan,
   generateTrainingPlan,
+  type AiUsage,
   type GeneratedTrainingPlan,
   type AdviceLight,
   type TrainingAdvice,
@@ -30,6 +32,10 @@ const todayCheckin = ref<DailyCheckin | null>(null);
 const goal = ref<TrainingGoal | null>(null);
 const savingRpe = ref(false);
 const quickError = ref("");
+/** 当日 AI 用量，用于显示剩余次数并避免误以为可以无限生成。 */
+const usage = ref<AiUsage | null>(null);
+/** 本次生成是否为指纹复用（数据没变，没有调用模型）。 */
+const reusedNotice = ref(false);
 
 /**
  * 一键体感。四个选项各自对应一个引擎结论，点下去立刻能看到灯色或处方变化：
@@ -104,12 +110,14 @@ async function refresh() {
   generationError.value = "";
   try {
     // 计划已经落库，刷新时读回来，不再每次进页面都清空
-    const [result, stored, currentGoal] = await Promise.all([
+    const [result, stored, currentGoal, currentUsage] = await Promise.all([
       getTrainingAdvice(),
       getStoredTrainingPlan().catch(() => null),
       getTrainingGoal().catch(() => null),
+      getAiUsage().catch(() => null),
     ]);
     goal.value = currentGoal;
+    usage.value = currentUsage;
     if (id !== requestId) return;
     advice.value = result;
     await loadTodayCheckin(result.calendarDate);
@@ -125,14 +133,15 @@ async function refresh() {
   }
 }
 
-async function generate() {
+async function generate(force = false) {
   if (generating.value || loading.value) return;
   const id = requestId;
   generating.value = true;
   generationError.value = "";
+  reusedNotice.value = false;
   generated.value = null;
   try {
-    const result = await generateTrainingPlan();
+    const result = await generateTrainingPlan(force);
     if (id !== requestId) return;
     // 生成期间用户可能在另一页更新了数据；刷新判灯，并拒绝展示跨日或灯色已改变的旧计划。
     const latest = await getTrainingAdvice();
@@ -147,6 +156,9 @@ async function generate() {
       return;
     }
     generated.value = result;
+    reusedNotice.value = result.reused;
+    if (result.usage) usage.value = result.usage;
+    else usage.value = await getAiUsage().catch(() => usage.value);
     storedLightMismatch.value = false;
   } catch (error) {
     if (id === requestId)
@@ -210,15 +222,28 @@ onBeforeUnmount(() => {
             DeepSeek，结合当前灯色安排训练。
           </p>
         </div>
-        <el-button type="primary" :loading="generating" @click="generate">
-          {{
-            generating
-              ? "DeepSeek 正在生成…"
-              : generated
-                ? "重新生成计划"
-                : "DeepSeek 生成计划"
-          }}
-        </el-button>
+        <div class="generation-actions">
+          <el-button
+            type="primary"
+            :loading="generating"
+            @click="generate(generated != null)"
+          >
+            {{
+              generating
+                ? "DeepSeek 正在生成…"
+                : generated
+                  ? "重新生成计划"
+                  : "DeepSeek 生成计划"
+            }}
+          </el-button>
+          <el-button
+            v-if="generated"
+            :loading="generating"
+            @click="generate(true)"
+          >
+            强制重新生成
+          </el-button>
+        </div>
       </div>
       <el-alert
         v-if="generationError"
@@ -229,6 +254,14 @@ onBeforeUnmount(() => {
         class="generation-error"
       />
       <el-alert
+        v-if="reusedNotice"
+        title="数据没有变化，已直接复用今天的计划，没有调用模型、也没有消耗次数。需要换一版请点「强制重新生成」。"
+        type="info"
+        :closable="false"
+        show-icon
+        class="generation-stale"
+      />
+      <el-alert
         v-if="storedLightMismatch"
         title="这份计划是按当时的恢复状态生成的，当前灯色已变化，建议重新生成。"
         type="warning"
@@ -236,6 +269,16 @@ onBeforeUnmount(() => {
         show-icon
         class="generation-stale"
       />
+      <p v-if="usage" class="generation-usage">
+        今日 DeepSeek 生成 {{ usage.usedToday }} / {{ usage.limitPerDay }} 次 · 剩余
+        {{ usage.remainingToday }} 次
+        <template v-if="usage.totalTokens > 0">
+          · 已用 {{ usage.totalTokens }} tokens
+        </template>
+        <template v-if="usage.reusedToday > 0">
+          · 复用 {{ usage.reusedToday }} 次（不计数）
+        </template>
+      </p>
       <p v-if="generated" class="generation-meta">
         {{ generated.provider }} · {{ generated.model }} ·
         {{ new Date(generated.generatedAt).toLocaleString("zh-CN") }} 生成<br />

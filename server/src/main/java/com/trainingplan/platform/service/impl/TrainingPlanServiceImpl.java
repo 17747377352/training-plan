@@ -13,6 +13,9 @@ import com.trainingplan.platform.dto.training.TrainingAdviceDto;
 import com.trainingplan.platform.dto.training.TrainingAdviceDto.*;
 import com.trainingplan.platform.entity.TrainingPlan;
 import com.trainingplan.platform.mapper.TrainingPlanMapper;
+import com.trainingplan.platform.client.DeepSeekResult;
+import com.trainingplan.platform.dto.training.AiUsageDto;
+import com.trainingplan.platform.service.AiUsageService;
 import com.trainingplan.platform.service.TrainingAdviceService;
 import com.trainingplan.platform.service.TrainingPlanService;
 import com.trainingplan.platform.service.UserService;
@@ -41,6 +44,7 @@ public class TrainingPlanServiceImpl implements TrainingPlanService {
     private final ObjectMapper json;
     private final TrainingPlanMapper planMapper;
     private final UserService userService;
+    private final AiUsageService aiUsageService;
 
     static final String SYSTEM_PROMPT = """
             你是面向业余骑行者的训练计划助手。根据用户 JSON 中最近 28 天的训练负荷、HRV、睡眠、
@@ -68,17 +72,40 @@ public class TrainingPlanServiceImpl implements TrainingPlanService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public GeneratedTrainingPlanDto generate(Long userId) {
+    public GeneratedTrainingPlanDto generate(Long userId, boolean force) {
         var advice = adviceService.getAdvice(userId, null);
         var context = contextBuilder.build(userId, advice);
-        String raw = client.generate(SYSTEM_PROMPT, context.payload());
+        String fingerprint = DigestUtils.md5DigestAsHex(
+                context.payload().toString().getBytes(StandardCharsets.UTF_8));
+
+        // 数据没变就不重复付费：指纹覆盖灯色、约束与全部指标，任一变化都会改变它
+        if (!force) {
+            GeneratedTrainingPlanDto stored = findStored(userId, advice.calendarDate());
+            if (stored != null && fingerprint.equals(stored.dataFingerprint())) {
+                aiUsageService.recordReuse(userId, advice.calendarDate(), PROMPT_VERSION);
+                return withUsage(stored, true, userId, advice.calendarDate());
+            }
+        }
+        // 配额在真正要调用模型之前校验，复用路径不消耗次数
+        aiUsageService.requireQuota(userId, advice.calendarDate());
+
+        DeepSeekResult generated;
+        try {
+            generated = client.generate(SYSTEM_PROMPT, context.payload());
+        } catch (BusinessException exception) {
+            aiUsageService.recordFailure(userId, advice.calendarDate(), PROMPT_VERSION,
+                    properties.model(), exception.getErrorCode().name());
+            throw exception;
+        }
+        String raw = generated.content();
         try {
             JsonNode plan = json.readTree(raw);
             String title = text(plan, "title", 120);
             String rationale = text(plan, "rationale", 1600);
             String adjustment = text(plan, "adjustment", 600);
             JsonNode rows = plan.path("steps");
-            if (!rows.isArray() || rows.size() > 8 || context.maxMinutes() == 0 && !rows.isEmpty()) invalid();
+            if (!rows.isArray() || rows.size() > 8) invalid("steps");
+            if (context.maxMinutes() == 0 && !rows.isEmpty()) invalid("steps（今天应仅休息）");
             var steps = new ArrayList<Step>();
             int total = 0;
             for (JsonNode row : rows) {
@@ -90,22 +117,60 @@ public class TrainingPlanServiceImpl implements TrainingPlanService {
                 total += minutes;
                 steps.add(new Step(name, minutes, low, high, watts(context.ftpWatts(), low), watts(context.ftpWatts(), high), effort));
             }
-            if (total > context.maxMinutes()) invalid();
+            if (total > context.maxMinutes()) invalid("总时长");
             String type = total == 0 ? "REST" : advice.light() == Light.GREEN ? "ENDURANCE" : "RECOVERY";
             String intensity = total == 0 ? "不安排骑行课" : "各段强度见下方，最高 " + steps.stream().mapToInt(Step::ftpPercentMax).max().orElseThrow() + "% FTP";
             var prescription = new Prescription(type, title, total, intensity, rationale, steps, adjustment);
             GeneratedTrainingPlanDto result = new GeneratedTrainingPlanDto(advice.calendarDate(), Instant.now(),
-                    "DeepSeek", properties.model(), PROMPT_VERSION,
-                    DigestUtils.md5DigestAsHex(context.payload().toString().getBytes(StandardCharsets.UTF_8)),
-                    context.summary(), advice.light(), rationale, prescription);
+                    "DeepSeek", properties.model(), PROMPT_VERSION, fingerprint,
+                    context.summary(), advice.light(), rationale, prescription,
+                    false, null);
             save(userId, advice, result);
-            return result;
+            aiUsageService.recordSuccess(userId, advice.calendarDate(), PROMPT_VERSION,
+                    properties.model(), generated);
+            return withUsage(result, false, userId, advice.calendarDate());
         } catch (BusinessException exception) {
+            // 校验不通过也算一次真实调用：请求可能已经产生费用
+            aiUsageService.recordFailure(userId, advice.calendarDate(), PROMPT_VERSION,
+                    properties.model(), exception.getErrorCode().name());
             throw exception;
         } catch (Exception exception) {
             // 解析失败不记录模型原文，避免把私人健康数据写入日志。
+            aiUsageService.recordFailure(userId, advice.calendarDate(), PROMPT_VERSION,
+                    properties.model(), ErrorCode.AI_INVALID_RESPONSE.name());
             throw new BusinessException(ErrorCode.AI_INVALID_RESPONSE);
         }
+    }
+
+    /**
+     * 附上生成后的当日用量，让前端能显示还剩几次。
+     *
+     * @param plan  计划
+     * @param reused 是否为指纹复用
+     * @param userId 用户 ID
+     * @param date   归属日期
+     * @return 带用量的计划
+     */
+    private GeneratedTrainingPlanDto withUsage(GeneratedTrainingPlanDto plan, boolean reused,
+                                               Long userId, LocalDate date) {
+        AiUsageDto usage = aiUsageService.usage(userId, date);
+        return new GeneratedTrainingPlanDto(plan.calendarDate(), plan.generatedAt(), plan.provider(),
+                plan.model(), plan.promptVersion(), plan.dataFingerprint(), plan.dataSummary(),
+                plan.light(), plan.rationale(), plan.prescription(), reused, usage);
+    }
+
+    /**
+     * 读当天已存的计划。
+     *
+     * @param userId 用户 ID
+     * @param date   归属日期
+     * @return 已存计划，没有时为 null
+     */
+    private GeneratedTrainingPlanDto findStored(Long userId, LocalDate date) {
+        TrainingPlan row = planMapper.selectOne(Wrappers.<TrainingPlan>lambdaQuery()
+                .eq(TrainingPlan::getUserId, userId)
+                .eq(TrainingPlan::getCalendarDate, date));
+        return row == null ? null : toDto(row);
     }
 
     @Override
@@ -166,7 +231,8 @@ public class TrainingPlanServiceImpl implements TrainingPlanService {
         return new GeneratedTrainingPlanDto(row.getCalendarDate(),
                 row.getGeneratedAt() == null ? null : row.getGeneratedAt().atZone(ZoneId.of("Asia/Shanghai")).toInstant(),
                 row.getProvider(), row.getModel(), row.getPromptVersion(), row.getDataFingerprint(),
-                row.getDataSummary(), parseLight(row.getLight()), row.getRationale(), prescription);
+                row.getDataSummary(), parseLight(row.getLight()), row.getRationale(), prescription,
+                false, null);
     }
 
     /**
@@ -210,16 +276,27 @@ public class TrainingPlanServiceImpl implements TrainingPlanService {
 
     private String text(JsonNode node, String field, int limit) {
         JsonNode value = node.path(field);
-        if (!value.isTextual() || value.asText().isBlank() || value.asText().length() > limit) invalid();
+        if (!value.isTextual() || value.asText().isBlank() || value.asText().length() > limit) invalid(field);
         return value.asText().trim();
     }
 
     private int integer(JsonNode node, String field, int min, int max) {
         JsonNode value = node.path(field);
-        if (!value.isIntegralNumber() || !value.canConvertToInt() || value.intValue() < min || value.intValue() > max) invalid();
+        if (!value.isIntegralNumber() || !value.canConvertToInt() || value.intValue() < min || value.intValue() > max) invalid(field);
         return value.intValue();
     }
 
     private Integer watts(Integer ftp, int percent) { return ftp == null ? null : (int) Math.round(ftp * percent / 100.0); }
-    private void invalid() { throw new BusinessException(ErrorCode.AI_INVALID_RESPONSE); }
+    /**
+     * 抛出结构校验失败。
+     *
+     * <p>点名是哪个字段不合法，便于定位「模型越界」还是「提示词没说清」；
+     * 只带字段名与约束，不带模型原文，避免私人健康数据进入错误信息。</p>
+     *
+     * @param field 不合法或被越界的字段
+     */
+    private void invalid(String field) {
+        throw new BusinessException(ErrorCode.AI_INVALID_RESPONSE,
+                "AI 返回的 " + field + " 不符合当前恢复限制，请重新生成");
+    }
 }
