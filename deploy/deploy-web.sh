@@ -35,6 +35,12 @@ log "building web application"
 bundle="$tmp_dir/bundle"
 mkdir -p "$bundle/web"
 cp -R "$PROJECT_ROOT/web/dist/." "$bundle/web/"
+# nginx 以别的用户运行，静态文件必须对所有人可读：本地 umask 偏严时（曾出现 600 的
+# garmin_pair_helper.py）浏览器会拿到 403，而部署过程本身不会报任何错。这里统一放开；
+# a+rX 只给目录补执行位，不会把普通文件变成可执行。
+chmod -R a+rX "$bundle/web"
+# 明确断言一次：宁可部署失败，也不要上线后让用户看到 403
+[[ -z "$(find "$bundle/web" ! -perm -o=r)" ]] || fail "web bundle contains files not readable by others"
 cp "$PROJECT_ROOT/deploy/remote-deploy-web.sh" "$bundle/"
 printf 'component=web\nrelease=%s\ngit_sha=%s\nbuilt_at=%s\n' \
   "$release_id" "$git_sha" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$bundle/RELEASE"
