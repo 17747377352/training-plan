@@ -479,7 +479,10 @@ def test_training_status_row_prefers_primary_device():
 
 def test_training_status_row_returns_none_without_data():
     assert build_worker()._training_status_row({}, "2026-09-21") is None
-    assert build_worker()._training_status_row({"mostRecentTrainingStatus": {}}, "2026-09-21") is None
+    assert (
+        build_worker()._training_status_row({"mostRecentTrainingStatus": {}}, "2026-09-21")
+        is None
+    )
 
 
 def test_hr_zone_rows_sorted_and_typed():

@@ -1,0 +1,12 @@
+FROM eclipse-temurin:17-jre-jammy
+
+RUN groupadd --system app \
+    && useradd --system --gid app --home-dir /opt/app --create-home app
+
+WORKDIR /opt/app
+COPY artifacts/*.jar app.jar
+RUN chown app:app app.jar
+
+USER app
+EXPOSE 18080
+ENTRYPOINT ["java", "-jar", "/opt/app/app.jar"]

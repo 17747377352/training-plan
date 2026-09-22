@@ -13,6 +13,7 @@ import {
 } from "./token";
 
 const baseURL = import.meta.env.VITE_API_BASE_URL;
+const loginPath = `${import.meta.env.BASE_URL}login`;
 
 const client = axios.create({
   baseURL,
@@ -54,8 +55,8 @@ client.interceptors.response.use(
         return await client.request(original);
       } catch (refreshError) {
         clearTokens();
-        if (window.location.pathname !== "/login") {
-          window.location.assign("/login");
+        if (window.location.pathname !== loginPath) {
+          window.location.assign(loginPath);
         }
         return Promise.reject(refreshError);
       } finally {

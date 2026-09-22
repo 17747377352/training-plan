@@ -1472,7 +1472,6 @@ body {
 }
 
 /* 趋势页：可点击表格与单日明细抽屉 */
-.trend-table-clickable :deep(.el-table__row),
 .trend-table-clickable .el-table__row {
   cursor: pointer;
 }

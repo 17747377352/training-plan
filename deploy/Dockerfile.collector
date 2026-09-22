@@ -1,0 +1,17 @@
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN groupadd --system app \
+    && useradd --system --gid app --home-dir /opt/app --create-home app
+
+WORKDIR /opt/app
+COPY artifacts/*.whl /tmp/
+RUN pip install /tmp/training_plan_collector-*.whl \
+    && rm /tmp/training_plan_collector-*.whl
+
+USER app
+EXPOSE 18090
+ENTRYPOINT ["training-plan-collector"]

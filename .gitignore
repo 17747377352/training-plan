@@ -32,3 +32,6 @@ collector/.ruff_cache/
 storage/
 logs/
 
+# Deployment secrets (only commit the example)
+deploy/app.env
+deploy/*.env.local

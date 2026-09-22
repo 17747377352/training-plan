@@ -167,6 +167,55 @@ WHERE u.username = '<用户名>' AND r.role_code = 'ADMIN';
 
 用户被禁用后无法登录、无法续期，但已签发的 access token 在最长 15 分钟内仍可通过签名校验。
 
+## 服务器路径部署约定
+
+`songtop.xyz` 上的 Training Plan 使用独立子路径，避免与既有站点的 `/api/` 冲突：
+
+- 前端入口：`https://songtop.xyz/plan/`，静态文件部署到 `/var/www/plan`；Vite 生产构建的 `base` 必须为 `/plan/`。
+- 后端入口：`https://songtop.xyz/planapi/`；Nginx 去掉 `/planapi/` 前缀后转发到 `127.0.0.1:18080`。
+- 前端生产环境的 API Base URL 使用 `/planapi`，业务请求 `/api/**` 最终转发为后端的 `/api/**`。
+- Collector 只监听回环地址，不经 Nginx 暴露。
+
+服务器使用的 Nginx 配置副本位于 `deploy/nginx/songtop.xyz.conf`。Garmin 登录和 DeepSeek 生成可能超过默认代理超时，因此 `/planapi/` 的读写超时设为 160 秒。
+
+### 一键部署
+
+部署脚本会在本地运行三端测试与构建，将发布包上传到服务器，为数据库做逻辑备份，然后使用 Docker Compose 启动后端与 Collector。前端和当前发布都通过符号链接原子切换；健康检查失败时自动恢复上一版容器和静态文件。Flyway 变更不会自动反向回滚，但每次部署前的 SQL 备份会保留在 `/opt/training-plan/backups/`。
+
+首次部署先配置服务器密钥：
+
+```bash
+mkdir -p /opt/training-plan/shared
+cp deploy/app.env.example /opt/training-plan/shared/app.env
+vim /opt/training-plan/shared/app.env
+chmod 600 /opt/training-plan/shared/app.env
+```
+
+`TOKEN_CIPHER_KEY` 必须使用导入现有 Garmin 令牌时的原密钥；`COLLECTOR_SERVICE_TOKEN` 和 `COLLECTOR_SERVER_TOKEN` 必须相同。数据库应使用只授权 `training_plan` 库的独立账号，不要把 MySQL root 密码写入应用环境文件。
+
+如果服务器还没有应用账号，先进入 MySQL 创建（将用户名和密码与 `app.env` 保持一致）：
+
+```sql
+CREATE USER 'training_plan_app'@'%' IDENTIFIED BY '<strong-random-password>';
+GRANT ALL PRIVILEGES ON training_plan.* TO 'training_plan_app'@'%';
+FLUSH PRIVILEGES;
+```
+
+配置好后，在项目根目录执行：
+
+```bash
+./deploy/deploy.sh
+```
+
+可用参数：
+
+- `DEPLOY_HOST=root@123.56.22.101`：覆盖 SSH 目标。
+- `ALLOW_DIRTY=1`：明确允许部署未提交的本地代码；默认拒绝。
+- `SKIP_TESTS=1`：复用现有构建产物，仅用于已手动验证的紧急发布。
+- `BOOTSTRAP_SWAP=0`：不在无 Swap 的小内存服务器上自动创建 2 GiB `/swapfile`。
+
+每次发布保留在 `/opt/training-plan/releases/<UTC时间>-<Git SHA>/`，脚本不会自动删除历史版本或备份。
+
 ## 开发状态
 
 开发进度和下一步任务记录在 [docs/开发进度.md](docs/开发进度.md)。

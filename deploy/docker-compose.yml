@@ -1,0 +1,68 @@
+name: training-plan
+
+services:
+  server:
+    image: training-plan-server:${RELEASE_ID}
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: training-plan-server
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ${APP_ENV_FILE}
+    environment:
+      TZ: Asia/Shanghai
+      SERVER_PORT: "18080"
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_URL: jdbc:mysql://127.0.0.1:13306/training_plan?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+      SPRING_DATA_REDIS_HOST: 127.0.0.1
+      SPRING_DATA_REDIS_PORT: "16379"
+      SPRING_DATA_REDIS_DATABASE: "5"
+      COLLECTOR_BASE_URL: http://127.0.0.1:18090
+      APP_CORS_ALLOWED_ORIGINS: https://songtop.xyz,https://www.songtop.xyz
+      REGISTRATION_ENABLED: "false"
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=70 -XX:InitialRAMPercentage=20 -XX:+ExitOnOutOfMemoryError
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    mem_limit: 640m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  collector:
+    image: training-plan-collector:${RELEASE_ID}
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    container_name: training-plan-collector
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ${APP_ENV_FILE}
+    environment:
+      TZ: Asia/Shanghai
+      COLLECTOR_ENV: prod
+      COLLECTOR_REDIS_HOST: 127.0.0.1
+      COLLECTOR_REDIS_PORT: "16379"
+      COLLECTOR_REDIS_DATABASE: "5"
+      COLLECTOR_TASK_QUEUE: training-plan:sync:jobs
+      COLLECTOR_SERVER_BASE_URL: http://127.0.0.1:18080
+      COLLECTOR_INTERNAL_HOST: 127.0.0.1
+      COLLECTOR_INTERNAL_PORT: "18090"
+    depends_on:
+      - server
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    mem_limit: 320m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
