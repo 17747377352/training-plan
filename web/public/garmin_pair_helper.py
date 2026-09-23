@@ -347,19 +347,25 @@ class BrowserLogin:
             return 600
         return 120 if self.headed else 45
 
-    def _should_keep_waiting(self, body):
-        """有窗口模式下，这一条响应是不是「还没结果，得继续等」。
+    def _should_keep_waiting(self, body, result=None):
+        """有窗口（含手动）模式下，这一条响应是不是「还没结果，得继续等」。
 
-        两种情况要继续等：Garmin 明确要求人机验证；或者响应根本不是登录结果
-        （非 JSON —— 实测是 Cloudflare 的验证插页）。后者曾漏判，导致提交后
-        2 秒就报「未识别的登录结果」，而窗口里其实正等着用户完成验证。
+        三种情况要继续等：
+        - 响应根本不是登录结果（非 JSON —— 实测是 Cloudflare 的验证插页）；
+        - Garmin 明确要求人机验证（CAPTCHA_REQUIRED）；
+        - **手动模式下收到 403**（HTML，多为 Cloudflare 拦截）：必须把窗口留给用户，
+          让他完成验证或重试。曾在这里判失败，结果把正在使用的 Garmin 窗口直接关掉。
         """
         if not self.headed:
             return False
         if not isinstance(body, dict):
             return True
         status = body.get("responseStatus")
-        return isinstance(status, dict) and status.get("type") == "CAPTCHA_REQUIRED"
+        if isinstance(status, dict) and status.get("type") == "CAPTCHA_REQUIRED":
+            return True
+        if self.manual and isinstance(result, dict) and result.get("status") == 403:
+            return True
+        return False
 
     def _capture_response(self, response):
         parsed = urllib.parse.urlsplit(response.url)
@@ -402,6 +408,10 @@ class BrowserLogin:
             self.browser = self.runtime.chromium.launch(
                 headless=not self.headed,
                 channel=self.channel,
+                # Playwright 默认会暴露 navigator.webdriver=true 之类的自动化特征，
+                # Cloudflare 据此就能判定为机器人 —— 即使表单是你手动填的。这个开关
+                # 让手动登录在内核层面更像普通 Chrome。
+                args=["--disable-blink-features=AutomationControlled"],
             )
         except Exception:
             raise BrowserLoginError(
@@ -456,21 +466,26 @@ class BrowserLogin:
             if self.result is not None:
                 result, self.result = self.result, None
                 body = result.get("body") or {}
-                if self._should_keep_waiting(body):
-                    # 有窗口模式：要么等用户在官方页面解题，要么这条根本不是登录结果
-                    # （Cloudflare 验证插页），都不能就此判失败。
+                if self._should_keep_waiting(body, result):
+                    # 有窗口（含手动）模式：等用户解题、或这条根本不是登录结果（Cloudflare
+                    # 插页/403），都不能就此判失败 —— 更不能把用户正在用的窗口关掉。
                     last_summary = self._response_summary(result)
-                    if not isinstance(body, dict):
-                        DIAGNOSTICS.info(
-                            "stage=login_result result=interactive_page %s", last_summary
-                        )
+                    DIAGNOSTICS.info(
+                        "stage=login_result result=interactive_page %s", last_summary
+                    )
                     continue
                 return self._accept_result(result)
+            if self.page.is_closed():
+                # 用户自己关了窗口：不必再空等到超时
+                raise BrowserLoginError(
+                    "Garmin 窗口已被关闭，本次登录中止。请重新提交配对码再试一次。"
+                )
             self.page.wait_for_timeout(100)
         if last_summary:
             raise BrowserLoginError(
-                "Garmin 返回的不是登录结果，而是在等你完成人机验证。"
-                f"请在已打开的浏览器窗口里完成验证后重试。诊断：{last_summary}"
+                "等待超时：Garmin 始终没有给出登录结果（多是还在等你完成人机验证，"
+                "或请求被 Cloudflare 拦截）。请查看浏览器窗口并完成验证后重试。"
+                f"诊断：{last_summary}"
             )
         raise BrowserLoginError("等待 Garmin 登录结果超时，请检查可见窗口或使用 --headed 重试。")
 
@@ -491,7 +506,11 @@ class BrowserLogin:
         if result["status"] == 429 or str(error.get("status-code")) == "429":
             self._rate_limited()
         if result["status"] == 403:
-            raise BrowserLoginError("Garmin 拒绝了浏览器请求（403）。请用 --headed 完成人机验证。")
+            raise BrowserLoginError(
+                "Garmin 拒绝了这次浏览器请求（403，多为 Cloudflare 拦截）。"
+                "请用 --manual 在可见窗口里自己登录；若窗口里有人机验证，先完成它。"
+                f"诊断：{summary}"
+            )
         status = body.get("responseStatus")
         status = status.get("type") if isinstance(status, dict) else None
         if status == "SUCCESSFUL" and isinstance(body.get("serviceTicketId"), str):

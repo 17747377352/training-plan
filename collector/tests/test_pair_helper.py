@@ -261,6 +261,25 @@ def test_non_json_response_diagnostic_names_content_type(helper, caplog):
 
 
 @pytest.mark.parametrize(
+    "manual,headed,status,expected",
+    [
+        # 手动模式收到 403（Cloudflare 拦截）：必须继续等 —— 否则会把用户正在
+        # 输入密码的 Garmin 窗口直接关掉（实测就是这样）
+        (True, True, 403, True),
+        (True, True, 200, False),
+        # 自动模式维持原行为：403 直接失败
+        (False, True, 403, False),
+        # 无窗口模式没有人可操作，一律不等待
+        (True, False, 403, False),
+    ],
+)
+def test_manual_mode_keeps_window_open_on_403(helper, manual, headed, status, expected):
+    session = helper.BrowserLogin("GLOBAL", headed=headed, manual=manual)
+    body = {"responseStatus": {"type": "SUCCESSFUL"}}
+    assert session._should_keep_waiting(body, {"status": status}) is expected
+
+
+@pytest.mark.parametrize(
     "manual,headed,expected",
     [
         # 手动登录要留足时间：用户得自己输邮箱密码、可能还要过人机验证和验证码
