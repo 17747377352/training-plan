@@ -3,12 +3,10 @@ import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import PageHeading from "../components/PageHeading.vue";
 import {
-  connectAccount,
   createPairCode,
   deleteAccount,
   importToken,
   listAccounts,
-  submitMfa,
   triggerSync,
   updateAutoSync,
   verifyAccount,
@@ -22,21 +20,9 @@ import type {
 const accounts = ref<GarminAccount[]>([]);
 const loading = ref(false);
 const errorMessage = ref("");
-const connecting = ref(false);
 const verifyingId = ref<number>();
 const switchingId = ref<number>();
 const sensitiveDataConsent = ref(false);
-
-const connectForm = reactive({
-  email: "",
-  password: "",
-  region: "CN" as GarminRegion,
-});
-
-const mfaDialogVisible = ref(false);
-const mfaCode = ref("");
-const mfaSubmitting = ref(false);
-const loginSessionId = ref("");
 
 const backfillDialogVisible = ref(false);
 const backfillAccountId = ref<number>();
@@ -113,70 +99,6 @@ async function loadAccounts() {
   } finally {
     loading.value = false;
   }
-}
-
-async function handleConnect() {
-  if (connecting.value) return;
-  if (!connectForm.email || !connectForm.password) {
-    ElMessage.warning("请填写 Garmin 邮箱和密码");
-    return;
-  }
-  if (!sensitiveDataConsent.value) {
-    ElMessage.warning("请先单独同意处理健康与训练数据");
-    return;
-  }
-  connecting.value = true;
-  try {
-    const result = await connectAccount({
-      ...connectForm,
-      email: connectForm.email.trim(),
-    });
-    // 密码不留在前端内存里
-    connectForm.password = "";
-    if (result.status === "MFA_REQUIRED" && result.loginSessionId) {
-      loginSessionId.value = result.loginSessionId;
-      mfaCode.value = "";
-      mfaDialogVisible.value = true;
-      ElMessage.info("Garmin 需要二次验证，请输入验证码");
-      return;
-    }
-    ElMessage.success("Garmin 账号连接成功");
-    askInitialBackfill(result.account?.id);
-  } catch {
-    // 错误提示由请求拦截器统一处理
-  } finally {
-    connecting.value = false;
-  }
-}
-
-async function handleSubmitMfa() {
-  if (mfaSubmitting.value) return;
-  if (!mfaCode.value) {
-    ElMessage.warning("请输入验证码");
-    return;
-  }
-  mfaSubmitting.value = true;
-  try {
-    const result = await submitMfa(loginSessionId.value, mfaCode.value.trim());
-    if (result.status === "MFA_REQUIRED") {
-      ElMessage.warning("验证码不正确，请重新输入");
-      return;
-    }
-    mfaDialogVisible.value = false;
-    mfaCode.value = "";
-    ElMessage.success("Garmin 账号连接成功");
-    askInitialBackfill(result.account?.id);
-  } catch {
-    // 会话仍保留，允许用户重试；错误提示由拦截器处理
-  } finally {
-    mfaSubmitting.value = false;
-  }
-}
-
-function handleCancelMfa() {
-  mfaDialogVisible.value = false;
-  mfaCode.value = "";
-  ElMessage.info("已取消验证码输入，可稍后重新连接");
 }
 
 /** 绑定成功后询问是否首次拉取历史数据。 */
@@ -361,69 +283,48 @@ onMounted(loadAccounts);
     <PageHeading
       eyebrow="数据来源"
       title="Garmin 账号"
-      description="绑定 Garmin 账号，管理认证状态、自动同步和历史数据回填。"
+      description="在自己的电脑上安全登录 Garmin，绑定后由平台自动同步训练与健康数据。"
     />
 
     <el-card class="connect-card">
       <template #header>
-        <strong>添加 Garmin 账号</strong>
-        <span class="card-hint">密码只用于本次登录，不会保存</span>
+        <strong>绑定 Garmin 账号</strong>
+        <span class="card-hint">推荐使用桌面助手</span>
       </template>
-      <el-form label-width="90px" @submit.prevent>
-        <el-form-item label="邮箱">
-          <el-input
-            v-model="connectForm.email"
-            placeholder="Garmin 登录邮箱"
-            autocomplete="off"
-          />
-        </el-form-item>
-        <el-form-item label="密码">
-          <el-input
-            v-model="connectForm.password"
-            type="password"
-            show-password
-            placeholder="Garmin 登录密码"
-            autocomplete="new-password"
-          />
-        </el-form-item>
-        <el-form-item label="站点">
-          <el-select v-model="connectForm.region" style="width: 200px">
-            <el-option label="中国区（connect.garmin.cn）" value="CN" />
-            <el-option label="国际站（connect.garmin.com）" value="GLOBAL" />
-          </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-checkbox v-model="sensitiveDataConsent" class="legal-consent">
-            我单独同意平台按
-            <router-link to="/legal/privacy" target="_blank"
-              >《隐私政策》</router-link
-            >
-            处理我的健康与训练数据，用于同步、恢复评估和训练计划。
-          </el-checkbox>
-        </el-form-item>
-        <el-form-item>
-          <el-button
-            type="primary"
-            :loading="connecting"
-            :disabled="connecting || !sensitiveDataConsent"
-            @click="handleConnect"
-          >
-            连接 Garmin
-          </el-button>
-          <el-button @click="importDialogVisible = true">导入令牌</el-button>
-          <el-button :loading="pairLoading" @click="openPairDialog">
-            用桌面助手绑定
-          </el-button>
-        </el-form-item>
-      </el-form>
-      <el-alert type="info" :closable="false" class="connect-hint">
+      <el-alert type="info" :closable="false" class="binding-intro" show-icon>
         <template #default>
-          Garmin
-          会对程序登录做限流或人机验证，此时可改用「导入令牌」：在浏览器登录
-          connect.garmin.com
-          后取得令牌交给平台，之后由平台自动刷新，无需重复登录。
+          Garmin 会限制云服务器登录。桌面助手在你的电脑上完成认证，密码不会经过本平台；
+          绑定成功后只将可撤销的登录令牌加密保存。
         </template>
       </el-alert>
+      <div class="binding-consent">
+        <el-checkbox v-model="sensitiveDataConsent" class="legal-consent">
+          我单独同意平台按
+          <router-link to="/legal/privacy" target="_blank">《隐私政策》</router-link>
+          处理我的健康与训练数据，用于同步、恢复评估和训练计划。
+        </el-checkbox>
+      </div>
+      <div class="binding-actions">
+        <el-button
+          type="primary"
+          size="large"
+          :loading="pairLoading"
+          :disabled="pairLoading || !sensitiveDataConsent"
+          @click="openPairDialog"
+        >
+          使用桌面助手绑定
+        </el-button>
+        <el-button
+          size="large"
+          :disabled="!sensitiveDataConsent"
+          @click="importDialogVisible = true"
+        >
+          手动导入令牌
+        </el-button>
+      </div>
+      <p class="binding-note">
+        已有助手导出的令牌时可手动导入；平台不再接收 Garmin 账号密码。
+      </p>
     </el-card>
 
     <el-card v-loading="loading" class="accounts-card">
@@ -508,35 +409,6 @@ onMounted(loadAccounts);
         </el-table-column>
       </el-table>
     </el-card>
-
-    <el-dialog
-      v-model="mfaDialogVisible"
-      title="输入 Garmin 验证码"
-      width="420px"
-      :close-on-click-modal="false"
-      @close="handleCancelMfa"
-    >
-      <p class="mfa-hint">
-        Garmin 已向你的邮箱或验证器发送验证码，请在有效期内输入。
-      </p>
-      <el-input
-        v-model="mfaCode"
-        placeholder="6 位验证码"
-        maxlength="16"
-        @keyup.enter="handleSubmitMfa"
-      />
-      <template #footer>
-        <el-button @click="handleCancelMfa">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="mfaSubmitting"
-          :disabled="mfaSubmitting"
-          @click="handleSubmitMfa"
-        >
-          提交验证码
-        </el-button>
-      </template>
-    </el-dialog>
 
     <el-dialog
       v-model="backfillDialogVisible"
@@ -685,6 +557,30 @@ onMounted(loadAccounts);
 </template>
 
 <style scoped>
+.binding-intro {
+  margin-bottom: 18px;
+}
+
+.binding-consent {
+  margin-bottom: 16px;
+}
+
+.binding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.binding-actions .el-button {
+  margin-left: 0;
+}
+
+.binding-note {
+  margin: 12px 0 0;
+  color: #909399;
+  font-size: 13px;
+}
+
 .pair-steps {
   margin: 12px 0;
   padding-left: 20px;
