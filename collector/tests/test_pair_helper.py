@@ -232,6 +232,34 @@ def test_response_capture_ignores_preflight_and_never_logs_body(helper, caplog):
         assert secret not in caplog.text
 
 
+@pytest.mark.parametrize(
+    "headed,body,expected",
+    [
+        # 有窗口模式：非 JSON 是 Cloudflare 验证插页，必须继续等用户解题。
+        # 这条曾漏判 —— 提交后 2 秒就报「未识别的登录结果」而放弃。
+        (True, None, True),
+        (True, {"responseStatus": {"type": "CAPTCHA_REQUIRED"}}, True),
+        (True, {"responseStatus": {"type": "SUCCESSFUL"}}, False),
+        # 无窗口模式没有人可以解题，非 JSON 直接判失败。
+        (False, None, False),
+        (False, {"responseStatus": {"type": "CAPTCHA_REQUIRED"}}, False),
+    ],
+)
+def test_keep_waiting_only_for_interactive_pages_in_headed_mode(helper, headed, body, expected):
+    session = helper.BrowserLogin("GLOBAL", headed=headed)
+    assert session._should_keep_waiting(body) is expected
+
+
+def test_non_json_response_diagnostic_names_content_type(helper, caplog):
+    session = helper.BrowserLogin("GLOBAL", headed=True)
+    result = {"status": 200, "body": None, "content_type": "text/html"}
+    with caplog.at_level("INFO", logger="garmin-pair-helper"):
+        summary = session._response_summary(result)
+    assert "json=no" in summary
+    assert "contentType=text/html" in summary
+    assert "body=html" in summary
+
+
 def test_browser_never_falls_back_to_http_on_error(helper, monkeypatch):
     monkeypatch.setattr(helper, "start_browser_login", lambda *args: ("error", "blocked"))
     http = Mock(side_effect=AssertionError("不应调用 HTTP 登录"))

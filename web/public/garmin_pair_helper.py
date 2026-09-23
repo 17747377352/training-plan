@@ -286,11 +286,37 @@ class BrowserLogin:
             status = "REDACTED"
         http_status = result.get("status")
         http_status = http_status if type(http_status) is int else "unknown"
+        # content-type 能区分「登录结果（JSON）」与「Cloudflare 人机验证插页（HTML）」，
+        # 它本身不含任何凭据，可以安全记录。
+        content_type = str(result.get("content_type") or "").strip().lower()
+        if not content_type:
+            body_kind = "unknown"
+        elif "json" in content_type:
+            body_kind = "json"
+        elif "html" in content_type:
+            body_kind = "html"
+        else:
+            body_kind = "other"
         return (
             f"HTTP={http_status} responseStatus={status} "
             f"json={'yes' if isinstance(result.get('body'), dict) else 'no'} "
-            f"ticket={'yes' if bool(body.get('serviceTicketId')) else 'no'}"
+            f"ticket={'yes' if bool(body.get('serviceTicketId')) else 'no'} "
+            f"contentType={content_type or 'missing'} body={body_kind}"
         )
+
+    def _should_keep_waiting(self, body):
+        """有窗口模式下，这一条响应是不是「还没结果，得继续等」。
+
+        两种情况要继续等：Garmin 明确要求人机验证；或者响应根本不是登录结果
+        （非 JSON —— 实测是 Cloudflare 的验证插页）。后者曾漏判，导致提交后
+        2 秒就报「未识别的登录结果」，而窗口里其实正等着用户完成验证。
+        """
+        if not self.headed:
+            return False
+        if not isinstance(body, dict):
+            return True
+        status = body.get("responseStatus")
+        return isinstance(status, dict) and status.get("type") == "CAPTCHA_REQUIRED"
 
     def _capture_response(self, response):
         parsed = urllib.parse.urlsplit(response.url)
@@ -305,7 +331,10 @@ class BrowserLogin:
             body = response.json()
         except Exception:
             body = None
-        self.result = {"status": response.status, "body": body}
+        # Playwright 的响应对象有 headers；测试替身可能没有，故用 getattr 兜底。
+        headers = getattr(response, "headers", None) or {}
+        content_type = str(headers.get("content-type") or "").split(";")[0].strip()
+        self.result = {"status": response.status, "body": body, "content_type": content_type}
         DIAGNOSTICS.info("stage=sso_response %s", self._response_summary(self.result))
 
     def _hold_ticket(self, route):
@@ -373,20 +402,27 @@ class BrowserLogin:
             ) from None
         deadline = time.monotonic() + (120 if self.headed else 45)
         self._stage("login_result")
+        last_summary = ""
         while time.monotonic() < deadline:
             if self.result is not None:
                 result, self.result = self.result, None
                 body = result.get("body") or {}
-                response_status = body.get("responseStatus") if isinstance(body, dict) else None
-                if (
-                    self.headed
-                    and isinstance(response_status, dict)
-                    and response_status.get("type") == "CAPTCHA_REQUIRED"
-                ):
-                    # 有窗口模式由用户在官方页面解题，不自动重放密码。
+                if self._should_keep_waiting(body):
+                    # 有窗口模式：要么等用户在官方页面解题，要么这条根本不是登录结果
+                    # （Cloudflare 验证插页），都不能就此判失败。
+                    last_summary = self._response_summary(result)
+                    if not isinstance(body, dict):
+                        DIAGNOSTICS.info(
+                            "stage=login_result result=interactive_page %s", last_summary
+                        )
                     continue
                 return self._accept_result(result)
             self.page.wait_for_timeout(100)
+        if last_summary:
+            raise BrowserLoginError(
+                "Garmin 返回的不是登录结果，而是在等你完成人机验证。"
+                f"请在已打开的浏览器窗口里完成验证后重试。诊断：{last_summary}"
+            )
         raise BrowserLoginError("等待 Garmin 登录结果超时，请检查可见窗口或使用 --headed 重试。")
 
     @staticmethod
