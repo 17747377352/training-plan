@@ -520,12 +520,13 @@ onMounted(loadAccounts);
 python3 -m venv .venv
 .venv/bin/python -m pip install garminconnect==0.3.16 playwright
 .venv/bin/python -m playwright install chromium
-.venv/bin/python garmin_pair_helper.py</pre>
+.venv/bin/python garmin_pair_helper.py --manual</pre>
           <span class="pair-hint"
             >Windows 把 Python 路径换成 <code>.venv\Scripts\python</code>。
             首次需下载浏览器，完成安装后再领取配对码。
-            遇到人机验证时，运行命令加 <code>--headed</code>，在打开的 Garmin
-            窗口中完成验证。</span
+            <b><code>--manual</code> 是推荐用法</b>：助手只打开 Garmin
+            官方页面，由你自己输入账号密码（因此不需要填密码、密码也不经过助手）；
+            代填代提交本身会被识别为机器人、直接触发人机验证。</span
           >
         </li>
         <li>

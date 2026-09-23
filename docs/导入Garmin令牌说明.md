@@ -23,7 +23,7 @@
    python3 -m venv .venv
    .venv/bin/python -m pip install garminconnect==0.3.16 playwright
    .venv/bin/python -m playwright install chromium
-   .venv/bin/python garmin_pair_helper.py
+   .venv/bin/python garmin_pair_helper.py --manual
    ```
 
    Windows（PowerShell / cmd）：
@@ -32,30 +32,36 @@
    python -m venv .venv
    .venv\Scripts\python -m pip install garminconnect==0.3.16 playwright
    .venv\Scripts\python -m playwright install chromium
-   .venv\Scripts\python garmin_pair_helper.py
+   .venv\Scripts\python garmin_pair_helper.py --manual
    ```
 
    已经装了 [uv](https://docs.astral.sh/uv/) 可执行：
 
    ```bash
    uv run --python 3.12 --with playwright python -m playwright install chromium
-   uv run --python 3.12 --with garminconnect==0.3.16 --with playwright python garmin_pair_helper.py
+   uv run --python 3.12 --with garminconnect==0.3.16 --with playwright python garmin_pair_helper.py --manual
    ```
 
    > **不要在 macOS 上直接 `pip install`**：Homebrew / 系统自带的 Python 有 PEP 668 保护，
    > 会报 `externally-managed-environment`。那不是缺东西，是系统不允许往全局环境装包，
    > 用上面的 venv 方式即可（助手本身在缺依赖时也会把这几条命令打印出来）。
 
-4. 助手会自动打开浏览器（没打开的话，看终端里打印的本机地址，手动访问它）
-5. 在页面里填：配对码、Garmin 登录邮箱、Garmin 密码（开了两步验证会再让你填一次验证码）
-6. 看到「绑定成功」就可以了 —— 回到平台页面，账号已经出现
+4. 助手会打开一个 Garmin 官方登录窗口（没打开的话，看终端里打印的本机地址，手动访问它）
+5. 在助手页面上填：配对码、Garmin 登录邮箱（**手动模式下不需要填密码**）
+6. **在那个 Garmin 窗口里自己输入邮箱和密码并点登录**；出现人机验证、验证码也在这里完成
+7. 看到「绑定成功」就可以了 —— 回到平台页面，账号已经出现
 
-助手只监听本机（`127.0.0.1`），每次运行都会换一个随机地址；**密码只在本机内存里用于登录 Garmin，不会发给平台**。
+**为什么用 `--manual`（推荐）**：助手替你填表并点登录（`fill` + `click`）本身就是机器人特征，
+实测会直接触发 Cloudflare 人机验证。手动模式下助手只打开官方页面，输入全部由你完成，
+它退到后面等登录结果、再把票据换成平台能用的令牌 —— 那一步才是手动做不到的部分。
+手动模式隐含 `--headed`（必须有可见窗口），等待上限也从 2 分钟放宽到 10 分钟。
+
+助手只监听本机（`127.0.0.1`），每次运行都会换一个随机地址；**密码只输入到 Garmin 官方页面，既不发平台、也不经过助手**。
 
 助手默认使用无头 Chromium，登录、验证码提交、令牌兑换都由浏览器网络栈发起，
 不会自动退回 requests。浏览器能执行登录页 JavaScript，但不能保证解除 Cloudflare 风控或 IP 限流。
 
-- 遇到 CAPTCHA / 403：加 `--headed` 启动，在出现的 Garmin 窗口中完成人机验证。
+- 遇到 CAPTCHA / 403：用 `--manual`（或 `--headed`）启动，在 Garmin 窗口里自己完成人机验证。
 - 想用已安装的 Chrome：加 `--browser-channel chrome`，无需下载 Chromium。
 - 浏览器未安装：在运行助手的同一个环境执行 `python -m playwright install chromium`。
 - 返回 429：本次停止请求，并在助手中冷却 15 分钟；不要连续重试。

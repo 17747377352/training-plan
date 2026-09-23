@@ -74,6 +74,14 @@ macOS 的 externally-managed-environment 是系统 Python 保护，请使用上�
 人工验证：最后一行加 --headed。旧 HTTP 模式：另装 cloudscraper，加 --login-method http。
 """.rstrip()
 
+MANUAL_LOGIN_INSTRUCTIONS = """
+请在刚打开的浏览器窗口里手动完成 Garmin 登录（助手不会代填、也不会代提交）：
+  1. 自己输入 Garmin 邮箱与密码，然后点「登录」
+  2. 如果出现人机验证，请在窗口里完成
+  3. 如果要求验证码，也在窗口里输入
+完成后本终端会自动继续（最长等 10 分钟），请不要关闭窗口。
+""".rstrip()
+
 # 仅旧 HTTP 模式使用，避免前置 cffi 策略长时间阻塞；浏览器模式不运行该策略链。
 SLOW_CFFI_STRATEGIES = {"mobile+cffi", "widget+cffi", "portal+cffi"}
 
@@ -89,6 +97,7 @@ STATE: dict[str, object] = {
     "region": "GLOBAL",
     "login_method": "browser",
     "headed": False,
+    "manual": False,
     "browser_channel": "chromium",
     "pending_token": None,
     "expires_at": 0.0,
@@ -145,6 +154,15 @@ def form_page(message: str = "", error: bool = False) -> bytes:
       <label>令牌文件</label>
       <input value="{html.escape(str(token_file))}" disabled>"""
         hint = "已指定令牌文件，将直接把它交给平台，不再登录 Garmin。"
+    elif STATE["manual"]:
+        # 手动模式下密码完全不需要经过助手：你自己在 Garmin 官方页面输入即可。
+        credential_fields = ""
+        hint = (
+            "手动登录模式：助手会打开 Garmin 官方页面，"
+            "<b>由你自己在窗口里输入邮箱和密码</b>，助手不代填、不代提交，"
+            "所以本页面不需要密码，密码也不会经过助手。"
+            "请在 Garmin 窗口里完成登录（含人机验证、验证码），然后保持窗口打开。"
+        )
     else:
         credential_fields = """
       <label>Garmin 密码</label>
@@ -229,7 +247,14 @@ class BrowserLogin:
     所有方法必须由创建 Playwright 的同一线程调用。
     """
 
-    def __init__(self, region: str, *, headed: bool = False, channel: str = "chromium"):
+    def __init__(
+        self,
+        region: str,
+        *,
+        headed: bool = False,
+        channel: str = "chromium",
+        manual: bool = False,
+    ):
         from garminconnect.client import DI_CLIENT_IDS, DI_GRANT_TYPE, PORTAL_SSO_CLIENT_ID
 
         if region not in {"GLOBAL", "CN"}:
@@ -242,6 +267,9 @@ class BrowserLogin:
         self.client_ids = DI_CLIENT_IDS
         self.grant_type = DI_GRANT_TYPE
         self.headed = headed
+        # 手动模式：只打开官方页面，由用户自己输入账号密码，助手不代填不代提交。
+        # 程序化 fill()+click() 本身就是机器人特征，会直接换来一个人机验证。
+        self.manual = manual
         self.channel = channel
         self.runtime = self.browser = self.context = self.page = None
         self.result = None
@@ -303,6 +331,21 @@ class BrowserLogin:
             f"ticket={'yes' if bool(body.get('serviceTicketId')) else 'no'} "
             f"contentType={content_type or 'missing'} body={body_kind}"
         )
+
+    def _should_submit_credentials(self):
+        """是否由助手代填账号密码并提交。
+
+        手动模式返回 False：程序化填表（fill + click）本身就是机器人特征，会直接把
+        用户推到人机验证前面；让用户自己在官方页面输入，Cloudflare 看到的是真人操作。
+        助手只负责在后面等登录结果、拿票据换令牌 —— 那部分才是用户手动做不到的。
+        """
+        return not self.manual
+
+    def _login_deadline_seconds(self):
+        """等待登录结果的时长：手动输入（可能还有验证码）需要明显更久。"""
+        if self.manual:
+            return 600
+        return 120 if self.headed else 45
 
     def _should_keep_waiting(self, body):
         """有窗口模式下，这一条响应是不是「还没结果，得继续等」。
@@ -378,29 +421,35 @@ class BrowserLogin:
             self._rate_limited()
         try:
             self._stage("form_wait")
-            # 使用官网表单，使其 JavaScript 和 CAPTCHA token 参与提交。
-            # 有窗口模式给用户留出时间在官网完成人机验证。
             password_field = self.page.locator('input[type="password"]').first
             password_field.wait_for(state="visible", timeout=120_000 if self.headed else 30_000)
-            if (
-                urllib.parse.urlsplit(self.page.url).netloc
-                != urllib.parse.urlsplit(self.sso).netloc
-            ):
-                raise BrowserLoginError("登录页离开了 Garmin SSO，已停止填写凭据。")
-            self.page.locator(
-                'input[name="username"], input[type="email"], input#username'
-            ).first.fill(email)
-            password_field.fill(password)
-            self._stage("form_submit")
-            self.page.locator('button[type="submit"], input[type="submit"]').first.click(
-                no_wait_after=True,
-            )
+            if not self._should_submit_credentials():
+                # 手动模式：绝不代填、代提交。程序化 fill()+click() 本身就是机器人
+                # 特征，会直接换来一个人机验证；让用户自己敲，Cloudflare 看到的是真人。
+                self._stage("manual_login_wait")
+                DIAGNOSTICS.info("stage=manual_login_wait result=awaiting_user")
+                print(MANUAL_LOGIN_INSTRUCTIONS, flush=True)
+            else:
+                # 使用官网表单，使其 JavaScript 和 CAPTCHA token 参与提交。
+                if (
+                    urllib.parse.urlsplit(self.page.url).netloc
+                    != urllib.parse.urlsplit(self.sso).netloc
+                ):
+                    raise BrowserLoginError("登录页离开了 Garmin SSO，已停止填写凭据。")
+                self._stage("form_submit")
+                self.page.locator(
+                    'input[name="username"], input[type="email"], input#username'
+                ).first.fill(email)
+                password_field.fill(password)
+                self.page.locator('button[type="submit"], input[type="submit"]').first.click(
+                    no_wait_after=True,
+                )
         except PlaywrightTimeout:
             raise BrowserLoginError(
                 "Garmin 登录表单未就绪，可能遇到人机挑战或页面已改版。"
                 "请使用 --headed 打开可见窗口后再试；不要连续重试。"
             ) from None
-        deadline = time.monotonic() + (120 if self.headed else 45)
+        deadline = time.monotonic() + self._login_deadline_seconds()
         self._stage("login_result")
         last_summary = ""
         while time.monotonic() < deadline:
@@ -583,7 +632,10 @@ def start_browser_login(email, password, region):
     client = None
     try:
         client = BrowserLogin(
-            region, headed=bool(STATE["headed"]), channel=str(STATE["browser_channel"])
+            region,
+            headed=bool(STATE["headed"]),
+            channel=str(STATE["browser_channel"]),
+            manual=bool(STATE["manual"]),
         )
         needs_mfa, client_state = client.login(email, password)
         STATE.update(
@@ -937,7 +989,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(done_page(None, message) if outcome == "ok" else fail_page(message))
             return
 
-        if not password:
+        # 手动模式不需要密码：用户会在 Garmin 官方页面自己输入。
+        if not password and not STATE["manual"]:
             self._send(form_page("配对码、邮箱、密码都要填。", error=True))
             return
 
@@ -1031,6 +1084,14 @@ def main() -> int:
         "--headed", action="store_true", help="显示 Garmin 浏览器窗口以完成人机验证"
     )
     parser.add_argument(
+        "--manual",
+        action="store_true",
+        help=(
+            "手动登录（推荐）：只打开 Garmin 官方页面，由你自己输入账号密码，"
+            "助手不代填不代提交，避免程序化填表触发人机验证。隐含 --headed"
+        ),
+    )
+    parser.add_argument(
         "--browser-channel",
         choices=("chromium", "chrome", "msedge"),
         default="chromium",
@@ -1068,7 +1129,9 @@ def main() -> int:
     STATE["path_token"] = secrets.token_urlsafe(12)
     STATE["token_file"] = args.token_file
     STATE["login_method"] = args.login_method
-    STATE["headed"] = args.headed
+    # 手动登录必须有可见窗口，所以 --manual 隐含 --headed
+    STATE["manual"] = args.manual
+    STATE["headed"] = args.headed or args.manual
     STATE["browser_channel"] = args.browser_channel
 
     httpd = HelperServer(("127.0.0.1", args.port), Handler)

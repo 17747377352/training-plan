@@ -260,6 +260,38 @@ def test_non_json_response_diagnostic_names_content_type(helper, caplog):
     assert "body=html" in summary
 
 
+@pytest.mark.parametrize(
+    "manual,headed,expected",
+    [
+        # 手动登录要留足时间：用户得自己输邮箱密码、可能还要过人机验证和验证码
+        (True, True, 600),
+        (False, True, 120),
+        (False, False, 45),
+    ],
+)
+def test_login_deadline_gives_manual_login_enough_time(helper, manual, headed, expected):
+    session = helper.BrowserLogin("GLOBAL", headed=headed, manual=manual)
+    assert session._login_deadline_seconds() == expected
+
+
+def test_auto_fill_is_skipped_in_manual_mode(helper):
+    """程序化 fill+click 本身就是机器人特征，会直接换来一个人机验证。"""
+    manual = helper.BrowserLogin("GLOBAL", headed=True, manual=True)
+    assert manual._should_submit_credentials() is False
+    automatic = helper.BrowserLogin("GLOBAL", headed=True, manual=False)
+    assert automatic._should_submit_credentials() is True
+
+
+def test_manual_mode_form_does_not_ask_for_password(helper, monkeypatch):
+    """手动模式密码完全不经过助手：表单里不该有密码输入框。"""
+    monkeypatch.setitem(helper.STATE, "manual", True)
+    monkeypatch.setitem(helper.STATE, "token_file", "")
+    assert 'name="password"' not in helper.form_page().decode()
+
+    monkeypatch.setitem(helper.STATE, "manual", False)
+    assert 'name="password"' in helper.form_page().decode()
+
+
 def test_browser_never_falls_back_to_http_on_error(helper, monkeypatch):
     monkeypatch.setattr(helper, "start_browser_login", lambda *args: ("error", "blocked"))
     http = Mock(side_effect=AssertionError("不应调用 HTTP 登录"))
