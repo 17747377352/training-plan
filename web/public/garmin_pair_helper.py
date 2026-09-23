@@ -1,84 +1,62 @@
 #!/usr/bin/env python3
-"""训练计划 · Garmin 绑定助手。
+"""训练计划 · Garmin 绑定助手（本机 Playwright 浏览器登录）。
 
-在**你自己电脑上**完成 Garmin 登录，然后把登录得到的令牌交回平台。
+密码通过本机 Chromium 发给 Garmin，不发送给平台，也不写入文件。
+登录、MFA 和 DI 令牌兑换使用浏览器网络栈；平台只收到邮箱、站点和令牌。
 
-为什么要这样做
---------------
-Garmin 的登录接口按 IP 限流，而且配额很小（实测一次成功登录之后立刻返回 429），
-平台服务器上所有用户共用一个出口 IP，所以在服务器上登录别人的账号基本不可能成功。
-在你自己的网络里登录，用的是你自己那份配额。
+macOS / Linux（Python 3.12+）：
+    python3 -m venv .venv
+    .venv/bin/python -m pip install garminconnect==0.3.16 playwright
+    .venv/bin/python -m playwright install chromium
+    .venv/bin/python garmin_pair_helper.py
 
-安全性
-------
-- 只监听 127.0.0.1，外部网络访问不到；
-- 每次运行生成一个随机路径前缀，其他网页/程序即使扫到端口也用不了这个表单；
-- **密码只在本机内存里用于登录 Garmin，不会发给平台**，也不写入任何文件；
-- 交给平台的只有 Garmin 返回的令牌。
+Windows：把 .venv/bin/python 换成 .venv\\Scripts\\python。
+uv：
+    uv run --python 3.12 --with playwright python -m playwright install chromium
+    uv run --python 3.12 --with garminconnect==0.3.16 --with playwright python garmin_pair_helper.py
 
-用法
-----
-macOS / Linux（任意 Python 3.10+，不会污染系统环境）：
-
-    python3 -m venv .venv && .venv/bin/pip install -q garminconnect cloudscraper
-    .venv/bin/python garmin_pair_helper.py            # 绑定到线上平台
-    .venv/bin/python garmin_pair_helper.py --server http://127.0.0.1:8099   # 本地后端
-
-Windows（PowerShell / cmd）：
-
-    python -m venv .venv
-    .venv\\Scripts\\pip install garminconnect cloudscraper
-    .venv\\Scripts\\python garmin_pair_helper.py
-
-装了 uv 的话一条命令就够：
-
-    uv run --python 3.12 --with garminconnect --with cloudscraper python garmin_pair_helper.py
-
-注意：macOS 上 Homebrew / 系统自带的 Python 直接 `pip install` 会被 PEP 668 拦下并报
-`externally-managed-environment` —— 那不是缺东西，是系统不允许往全局环境装包，
-用上面的 venv 方式即可。cloudscraper 用于自动通过 Cloudflare 挑战（平台采集器也是这么做的），
-没装也能跑，只是遇到人机挑战时更容易失败。
+默认无头浏览器；遇到需要人工操作的挑战，用 --headed 显示 Garmin 窗口。
+--browser-channel chrome 可使用本机已安装的 Chrome。
+--no-browser 只关闭本机助手页面的自动打开，不会禁用登录用的 Chromium。
+--login-method http 保留原 HTTP 策略，需另装 cloudscraper；不会自动回退。
+--token-file PATH 可直接上传已有令牌，不需要安装登录依赖。
+浏览器不保证解除 Garmin IP 限流，遇到 429 应停止尝试。
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import contextlib
 import html
 import json
 import logging
 import pathlib
 import secrets
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 DEFAULT_SERVER = "https://songtop.xyz/planapi"
 
 DEPENDENCY_HINT = """
-缺少依赖 garminconnect / cloudscraper。
+缺少登录依赖。请使用 Python 3.12+，在独立环境安装：
 
-  macOS / Linux（任意 Python 3.10+，不需要动系统环境）：
-      python3 -m venv .venv && .venv/bin/pip install -q garminconnect cloudscraper
-      .venv/bin/python garmin_pair_helper.py
+  python3 -m venv .venv
+  .venv/bin/python -m pip install garminconnect==0.3.16 playwright
+  .venv/bin/python -m playwright install chromium
+  .venv/bin/python garmin_pair_helper.py
 
-  Windows（PowerShell / cmd）：
-      python -m venv .venv
-      .venv\\Scripts\\pip install garminconnect cloudscraper
-      .venv\\Scripts\\python garmin_pair_helper.py
-
-  装了 uv 的话一条命令就够：
-      uv run --python 3.12 --with garminconnect --with cloudscraper python garmin_pair_helper.py
-
-提示：macOS 上直接 pip install 会报 externally-managed-environment（PEP 668），
-      这是系统在保护全局环境，用上面的 venv 方式即可。
+Windows：把 .venv/bin/python 换成 .venv\\Scripts\\python。
+macOS 的 externally-managed-environment 是系统 Python 保护，请使用上述 venv。
+人工验证：最后一行加 --headed。旧 HTTP 模式：另装 cloudscraper，加 --login-method http。
 """.rstrip()
 
-# 0.3.16 的登录链会先跑三组 curl_cffi 指纹策略，每种网络超时 30 秒。启用
-# cloudscraper 会话后这两组 requests 策略已经能解 Cloudflare 挑战，跳过 cffi
-# 既不降低成功率又能避免白等几分钟（与平台采集器保持一致）。
+# 仅旧 HTTP 模式使用，避免前置 cffi 策略长时间阻塞；浏览器模式不运行该策略链。
 SLOW_CFFI_STRATEGIES = {"mobile+cffi", "widget+cffi", "portal+cffi"}
 
 # 单进程、单用户的本地工具，用模块级状态保存「待输入验证码」的登录会话即可
@@ -91,6 +69,12 @@ STATE: dict[str, object] = {
     "code": "",
     "email": "",
     "region": "GLOBAL",
+    "login_method": "browser",
+    "headed": False,
+    "browser_channel": "chromium",
+    "pending_token": None,
+    "expires_at": 0.0,
+    "cooldown_until": 0.0,
 }
 
 PAGE_HEAD = """<!doctype html>
@@ -98,25 +82,25 @@ PAGE_HEAD = """<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>训练计划 · Garmin 绑定助手</title>
 <style>
-  body {{ font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-         background: #f5f7f7; color: #303133; margin: 0; padding: 32px 16px; }}
-  .card {{ max-width: 560px; margin: 0 auto; background: #fff; border-radius: 10px;
-          padding: 28px 32px; box-shadow: 0 2px 12px rgba(0,0,0,.06); }}
-  h1 {{ font-size: 20px; margin: 0 0 4px; }}
-  .sub {{ color: #909399; font-size: 13px; margin-bottom: 20px; }}
-  label {{ display: block; font-size: 13px; margin: 14px 0 6px; }}
-  input, select {{ width: 100%; box-sizing: border-box; padding: 9px 11px; font-size: 14px;
-                  border: 1px solid #dcdfe6; border-radius: 6px; }}
-  input:focus, select:focus {{ outline: none; border-color: #2ca58d; }}
-  button {{ margin-top: 22px; width: 100%; padding: 11px; font-size: 15px; color: #fff;
-           background: #2ca58d; border: none; border-radius: 6px; cursor: pointer; }}
-  button:hover {{ background: #24907a; }}
-  .note {{ margin-top: 18px; padding: 12px 14px; background: #eef5f3; border-left: 4px solid #2ca58d;
-          border-radius: 4px; font-size: 13px; line-height: 1.7; }}
-  .warn {{ background: #fdf6ec; border-left-color: #e6a23c; }}
-  .err {{ background: #fef0f0; border-left-color: #f56c6c; }}
-  .ok {{ font-size: 15px; color: #147662; font-weight: 600; }}
-  code {{ background: #f4f4f5; padding: 1px 5px; border-radius: 3px; font-size: 13px; }}
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #f5f7f7; color: #303133; margin: 0; padding: 32px 16px; }
+  .card { max-width: 560px; margin: 0 auto; background: #fff; border-radius: 10px;
+          padding: 28px 32px; box-shadow: 0 2px 12px rgba(0,0,0,.06); }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #909399; font-size: 13px; margin-bottom: 20px; }
+  label { display: block; font-size: 13px; margin: 14px 0 6px; }
+  input, select { width: 100%; box-sizing: border-box; padding: 9px 11px; font-size: 14px;
+                  border: 1px solid #dcdfe6; border-radius: 6px; }
+  input:focus, select:focus { outline: none; border-color: #2ca58d; }
+  button { margin-top: 22px; width: 100%; padding: 11px; font-size: 15px; color: #fff;
+           background: #2ca58d; border: none; border-radius: 6px; cursor: pointer; }
+  button:hover { background: #24907a; }
+  .note { margin-top: 18px; padding: 12px 14px; background: #eef5f3; border-left: 4px solid #2ca58d;
+          border-radius: 4px; font-size: 13px; line-height: 1.7; }
+  .warn { background: #fdf6ec; border-left-color: #e6a23c; }
+  .err { background: #fef0f0; border-left-color: #f56c6c; }
+  .ok { font-size: 15px; color: #147662; font-weight: 600; }
+  code { background: #f4f4f5; padding: 1px 5px; border-radius: 3px; font-size: 13px; }
 </style></head><body><div class="card">"""
 
 PAGE_TAIL = "</div></body></html>"
@@ -147,8 +131,11 @@ def form_page(message: str = "", error: bool = False) -> bytes:
         credential_fields = """
       <label>Garmin 密码</label>
       <input name="password" type="password" autocomplete="off" required>"""
-        hint = ("Garmin 对同一网络的登录次数限制很严：<b>密码输错一次可能就要等几分钟再试</b>，"
-                "请不要连续点击。绑定时请保持本窗口打开。")
+        hint = (
+            "助手会在本机浏览器中登录 Garmin，请保持本窗口打开。"
+            "遇到人机验证时，用 <code>--headed</code> 启动助手后在 Garmin 窗口操作。"
+            "浏览器仍可能被限流，请不要连续点击。"
+        )
     return page(f"""
     <h1>绑定 Garmin 账号</h1>
     <div class="sub">登录在你自己的电脑上完成，密码不会发送给平台。</div>
@@ -157,7 +144,9 @@ def form_page(message: str = "", error: bool = False) -> bytes:
       <label>配对码（平台页面上领取）</label>
       <input name="code" value="{code}" placeholder="例如 K7M2PQ9R" autocomplete="off" required>
       <label>Garmin 登录邮箱</label>
-      <input name="email" value="{email}" placeholder="name@example.com" autocomplete="off" required>{credential_fields}
+      <input name="email" value="{email}" placeholder="name@example.com"
+             autocomplete="off" required>
+      {credential_fields}
       <label>站点</label>
       <select name="region">
         <option value="GLOBAL" {global_selected}>国际站（connect.garmin.com）</option>
@@ -204,6 +193,307 @@ def fail_page(message: str) -> bytes:
       如果是被 Garmin 限流，请等 15~30 分钟，或换一个网络（手机热点常常有效）。
     </div>
     """)
+
+
+class BrowserLoginError(Exception):
+    """只包含可展示文案；不携带响应正文、URL、密码或票据。"""
+
+
+class BrowserMfaInvalid(BrowserLoginError):
+    """验证码错误时可继续使用同一浏览器会话。"""
+
+
+class BrowserLogin:
+    """以真实 Chromium 页面完成 SSO、MFA 和 DI 令牌兑换。
+
+    不使用 Playwright 的 APIRequestContext：它不是浏览器的网络栈。
+    协议常量沿用固定版本 garminconnect；页面不保存到磁盘，也不开 trace/HAR。
+    所有方法必须由创建 Playwright 的同一线程调用。
+    """
+
+    def __init__(self, region: str, *, headed: bool = False, channel: str = "chromium"):
+        from garminconnect.client import DI_CLIENT_IDS, DI_GRANT_TYPE, PORTAL_SSO_CLIENT_ID
+
+        if region not in {"GLOBAL", "CN"}:
+            raise BrowserLoginError("站点无效，请选择国际站或中国区。")
+        domain = "garmin.cn" if region == "CN" else "garmin.com"
+        self.sso = f"https://sso.{domain}"
+        self.service = f"https://connect.{domain}/app"
+        self.token_url = f"https://diauth.{domain}/di-oauth2-service/oauth/token"
+        self.params = {"clientId": PORTAL_SSO_CLIENT_ID, "locale": "en-US", "service": self.service}
+        self.client_ids = DI_CLIENT_IDS
+        self.grant_type = DI_GRANT_TYPE
+        self.headed = headed
+        self.channel = channel
+        self.runtime = self.browser = self.context = self.page = None
+        self.result = None
+        self.mfa_method = "email"
+        self.token = None
+        # 与现有 finish_login(client.client.dumps()) 的接口兼容。
+        self.client = self
+
+    def close(self):
+        # 即使用户提前关掉窗口，也继续释放 Playwright 驱动。
+        for resource in (self.context, self.browser):
+            if resource is not None:
+                with contextlib.suppress(Exception):
+                    resource.close()
+        if self.runtime is not None:
+            with contextlib.suppress(Exception):
+                self.runtime.stop()
+        self.page = self.context = self.browser = self.runtime = None
+        self.result = self.token = None
+
+    def _capture_response(self, response):
+        parsed = urllib.parse.urlsplit(response.url)
+        if f"{parsed.scheme}://{parsed.netloc}" != self.sso or parsed.path not in {
+            "/portal/api/login",
+            "/portal/api/mfa/verifyCode",
+        }:
+            return
+        try:
+            body = response.json()
+        except Exception:
+            body = None
+        self.result = {"status": response.status, "body": body}
+
+    def _hold_ticket(self, route):
+        # CAS 票据只能兑换一次，阻止官网先用它换成无法导入的 JWT_WEB Cookie。
+        parsed = urllib.parse.urlsplit(route.request.url)
+        if (
+            f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == self.service
+            and "ticket" in urllib.parse.parse_qs(parsed.query)
+        ):
+            route.abort()
+        else:
+            route.continue_()
+
+    def login(self, email: str, password: str):
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
+        from playwright.sync_api import sync_playwright
+
+        self.runtime = sync_playwright().start()
+        try:
+            self.browser = self.runtime.chromium.launch(
+                headless=not self.headed,
+                channel=self.channel,
+            )
+        except Exception:
+            raise BrowserLoginError(
+                "浏览器启动失败。请在同一 Python 环境执行 python -m playwright install chromium；"
+                "使用 --browser-channel chrome 时需先安装 Chrome。"
+            ) from None
+        self.context = self.browser.new_context(locale="en-US")
+        self.page = self.context.new_page()
+        self.page.set_default_timeout(30_000)
+        self.page.on("response", self._capture_response)
+        self.page.route(self.service + "**", self._hold_ticket)
+        signin = self.sso + "/portal/sso/en-US/sign-in?" + urllib.parse.urlencode(self.params)
+        response = self.page.goto(signin, wait_until="domcontentloaded", timeout=45_000)
+        if response and response.status == 429:
+            self._rate_limited()
+        try:
+            # 使用官网表单，使其 JavaScript 和 CAPTCHA token 参与提交。
+            # 有窗口模式给用户留出时间在官网完成人机验证。
+            password_field = self.page.locator('input[type="password"]').first
+            password_field.wait_for(state="visible", timeout=120_000 if self.headed else 30_000)
+            if (
+                urllib.parse.urlsplit(self.page.url).netloc
+                != urllib.parse.urlsplit(self.sso).netloc
+            ):
+                raise BrowserLoginError("登录页离开了 Garmin SSO，已停止填写凭据。")
+            self.page.locator(
+                'input[name="username"], input[type="email"], input#username'
+            ).first.fill(email)
+            password_field.fill(password)
+            self.page.locator('button[type="submit"], input[type="submit"]').first.click(
+                no_wait_after=True,
+            )
+        except PlaywrightTimeout:
+            raise BrowserLoginError(
+                "Garmin 登录表单未就绪，可能遇到人机挑战或页面已改版。"
+                "请使用 --headed 打开可见窗口后再试；不要连续重试。"
+            ) from None
+        deadline = time.monotonic() + (120 if self.headed else 45)
+        while time.monotonic() < deadline:
+            if self.result is not None:
+                result, self.result = self.result, None
+                body = result.get("body") or {}
+                if (
+                    self.headed
+                    and isinstance(body, dict)
+                    and body.get("responseStatus", {}).get("type") == "CAPTCHA_REQUIRED"
+                ):
+                    # 有窗口模式由用户在官方页面解题，不自动重放密码。
+                    continue
+                return self._accept_result(result)
+            self.page.wait_for_timeout(100)
+        raise BrowserLoginError("等待 Garmin 登录结果超时，请检查可见窗口或使用 --headed 重试。")
+
+    @staticmethod
+    def _rate_limited():
+        STATE["cooldown_until"] = time.monotonic() + 900
+        raise BrowserLoginError(
+            "Garmin 返回 429，已停止请求并冷却 15 分钟。浏览器不能解除 IP 限流。"
+        )
+
+    def _accept_result(self, result, *, mfa=False):
+        body = result.get("body")
+        body = body if isinstance(body, dict) else {}
+        if result["status"] == 429 or str(body.get("error", {}).get("status-code")) == "429":
+            self._rate_limited()
+        if result["status"] == 403:
+            raise BrowserLoginError("Garmin 拒绝了浏览器请求（403）。请用 --headed 完成人机验证。")
+        status = body.get("responseStatus", {}).get("type")
+        if status == "SUCCESSFUL" and isinstance(body.get("serviceTicketId"), str):
+            self._exchange_ticket(body["serviceTicketId"])
+            return None, None
+        if status == "MFA_REQUIRED":
+            self.mfa_method = body.get("customerMfaInfo", {}).get("mfaLastMethodUsed") or "email"
+            return "needs_mfa", True
+        if status == "INVALID_USERNAME_PASSWORD":
+            raise BrowserLoginError("Garmin 邮箱或密码不正确。")
+        if status == "CAPTCHA_REQUIRED":
+            raise BrowserLoginError("Garmin 要求人机验证，请使用 --headed 在官方页面中完成。")
+        if mfa and result["status"] in {200, 400, 401, 422}:
+            raise BrowserMfaInvalid("验证码不正确或已过期，请重新输入；会话仍保留在本机。")
+        raise BrowserLoginError(f"Garmin 登录未完成（HTTP {result['status']}），请稍后再试。")
+
+    @staticmethod
+    def _fetch(page, url, *, headers, body):
+        parsed = urllib.parse.urlsplit(url)
+        current = urllib.parse.urlsplit(page.url)
+        if (parsed.scheme, parsed.netloc) != (current.scheme, current.netloc):
+            raise BrowserLoginError("浏览器所在域名与登录接口不一致，已停止提交。")
+        # 同源 fetch 由 Chromium 发出；禁止重定向，避免凭据被转发至其他地址。
+        return page.evaluate(
+            """async ({url, headers, body}) => {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 30000);
+          try {
+            const response = await fetch(url, {method: 'POST', headers, body,
+              credentials: 'include', mode: 'same-origin', redirect: 'error',
+              signal: controller.signal});
+            let data = null;
+            try { data = await response.json(); } catch (_) {}
+            return {status: response.status, body: data};
+          } finally { clearTimeout(timer); }
+        }""",
+            {"url": url, "headers": headers, "body": body},
+        )
+
+    def resume_login(self, _state, code):
+        result = self._fetch(
+            self.page,
+            self.sso + "/portal/api/mfa/verifyCode?" + urllib.parse.urlencode(self.params),
+            headers={"Content-Type": "application/json"},
+            body=json.dumps(
+                {
+                    "mfaMethod": self.mfa_method,
+                    "mfaVerificationCode": code,
+                    "rememberMyBrowser": False,
+                    "reconsentList": [],
+                    "mfaSetup": False,
+                }
+            ),
+        )
+        needs_mfa, _ = self._accept_result(result, mfa=True)
+        if needs_mfa:
+            raise BrowserMfaInvalid("仍需要验证码，请重新输入。")
+
+    def _exchange_ticket(self, ticket):
+        # 在 DI 域名内进行同源兑换，避免 SSO -> DI 跨域 CORS 限制；不回退到 requests。
+        token_page = self.context.new_page()
+        response = token_page.goto(self.token_url, wait_until="domcontentloaded", timeout=30_000)
+        if response and response.status == 429:
+            self._rate_limited()
+        for client_id in self.client_ids:
+            result = self._fetch(
+                token_page,
+                self.token_url,
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Authorization": "Basic " + base64.b64encode(f"{client_id}:".encode()).decode(),
+                },
+                body=urllib.parse.urlencode(
+                    {
+                        "client_id": client_id,
+                        "service_ticket": ticket,
+                        "grant_type": self.grant_type,
+                        "service_url": self.service,
+                    }
+                ),
+            )
+            if result["status"] == 429:
+                self._rate_limited()
+            body = result.get("body")
+            body = body if isinstance(body, dict) else {}
+            if result["status"] == 200 and all(
+                isinstance(body.get(key), str) and body[key]
+                for key in ("access_token", "refresh_token")
+            ):
+                # 刷新时必须使用签发令牌所对应的 client_id，与上游客户端保持一致。
+                actual_client_id = client_id
+                with contextlib.suppress(Exception):
+                    part = body["access_token"].split(".")[1]
+                    claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+                    if isinstance(claims.get("client_id"), str) and claims["client_id"]:
+                        actual_client_id = claims["client_id"]
+                self.token = {
+                    "di_token": body["access_token"],
+                    "di_refresh_token": body["refresh_token"],
+                    "di_client_id": actual_client_id,
+                }
+                return
+            # 只有明确的 client_id 不兼容才尝试下一候选；403/网络错误不重放票据。
+            if body.get("error") != "invalid_client":
+                break
+        raise BrowserLoginError("已完成登录，但未取得可续期的 DI 令牌，未向平台提交 Cookie。")
+
+    def dumps(self):
+        if not self.token:
+            raise BrowserLoginError("没有可导出的 DI 令牌。")
+        return json.dumps(self.token)
+
+
+def clear_pending():
+    client = STATE["pending_client"]
+    if isinstance(client, BrowserLogin):
+        client.close()
+    STATE.update(pending_client=None, pending_state=None, pending_token=None, expires_at=0.0)
+
+
+def expire_pending():
+    expires_at = float(STATE["expires_at"])
+    if expires_at and time.monotonic() >= expires_at:
+        clear_pending()
+
+
+def start_browser_login(email, password, region):
+    client = None
+    try:
+        client = BrowserLogin(
+            region, headed=bool(STATE["headed"]), channel=str(STATE["browser_channel"])
+        )
+        needs_mfa, client_state = client.login(email, password)
+        STATE.update(
+            pending_client=client, pending_state=client_state, expires_at=time.monotonic() + 300
+        )
+        return ("mfa" if needs_mfa else "ok"), None
+    except BrowserLoginError as exception:
+        message = str(exception)
+    except ImportError:
+        message = "缺少浏览器依赖，请安装 garminconnect==0.3.16 和 playwright。"
+    except KeyboardInterrupt:
+        if client is not None:
+            client.close()
+        raise
+    except Exception:
+        # Playwright 异常含 fill 参数与带票据的 URL，绝不能原样展示或记录。
+        message = "浏览器登录中断或网络超时，请检查浏览器窗口；可使用 --headed 重试。"
+    if client is not None:
+        client.close()
+    return "error", message
 
 
 def enable_cloudscraper() -> bool:
@@ -265,6 +555,13 @@ def start_login(email: str, password: str, region: str):
         ("ok", None) 已登录；("mfa", None) 需要验证码；("error", 文案) 失败。
     """
 
+    remaining = int(float(STATE["cooldown_until"]) - time.monotonic())
+    if remaining > 0:
+        return "error", f"Garmin 登录仍在冷却中，请约 {remaining // 60 + 1} 分钟后再试。"
+    clear_pending()
+    if STATE["login_method"] == "browser":
+        return start_browser_login(email, password, region)
+
     from garminconnect import Garmin
     from garminconnect.exceptions import (
         GarminConnectAuthenticationError,
@@ -273,8 +570,7 @@ def start_login(email: str, password: str, region: str):
     )
 
     enable_cloudscraper()
-    client = Garmin(email=email, password=password, is_cn=(region == "CN"),
-                    return_on_mfa=True)
+    client = Garmin(email=email, password=password, is_cn=(region == "CN"), return_on_mfa=True)
     if hasattr(client.client, "skip_strategies"):
         client.client.skip_strategies.update(SLOW_CFFI_STRATEGIES)
 
@@ -293,8 +589,10 @@ def start_login(email: str, password: str, region: str):
     except GarminConnectAuthenticationError:
         return "error", "Garmin 邮箱或密码不正确。" + describe(collector.drain())
     except GarminConnectTooManyRequestsError:
-        return "error", ("Garmin 正在限流这个网络：等 15~30 分钟再试，"
-                         "或换一个网络（手机热点常常有效）。" + describe(collector.drain()))
+        return "error", (
+            "Garmin 正在限流这个网络：等 15~30 分钟再试，"
+            "或换一个网络（手机热点常常有效）。" + describe(collector.drain())
+        )
     except GarminConnectConnectionError as exception:
         return "error", (
             "被 Garmin 拦住了。两种情况最常见：这个网络最近登录次数过多（等一会儿再试），"
@@ -302,8 +600,10 @@ def start_login(email: str, password: str, region: str):
             + describe(collector.drain() or str(exception))
         )
     except Exception as exception:  # noqa: BLE001 - 失败原因要原样告诉用户
-        return "error", (f"登录失败：{type(exception).__name__}: {str(exception)[:200]}"
-                         + describe(collector.drain()))
+        return "error", (
+            f"登录失败：{type(exception).__name__}: {str(exception)[:200]}"
+            + describe(collector.drain())
+        )
     finally:
         library_logger.removeHandler(collector)
         library_logger.setLevel(previous_level)
@@ -311,6 +611,7 @@ def start_login(email: str, password: str, region: str):
     if needs_mfa:
         STATE["pending_client"] = client
         STATE["pending_state"] = client_state
+        STATE["expires_at"] = time.monotonic() + 300
         return "mfa", None
 
     STATE["pending_client"] = client
@@ -325,18 +626,29 @@ def finish_login(client) -> tuple[str, str]:
         token_json = client.client.dumps()
     except Exception as exception:  # noqa: BLE001
         return "error", f"登录成功但令牌导出失败：{type(exception).__name__}"
+    # 登录耗时可能超过配对码有效期。失败时短暂保留令牌供换码重传，避免再登录。
+    if isinstance(client, BrowserLogin):
+        client.close()
+    STATE.update(
+        pending_client=None,
+        pending_state=None,
+        pending_token=token_json,
+        expires_at=time.monotonic() + 300,
+    )
     return upload_token(token_json)
 
 
 def upload_token(token_json: str) -> tuple[str, str]:
     """把令牌交给平台，由平台校验后加密入库。"""
 
-    payload = json.dumps({
-        "code": STATE["code"],
-        "email": STATE["email"],
-        "tokenJson": token_json,
-        "region": STATE["region"],
-    }).encode("utf-8")
+    payload = json.dumps(
+        {
+            "code": STATE["code"],
+            "email": STATE["email"],
+            "tokenJson": token_json,
+            "region": STATE["region"],
+        }
+    ).encode("utf-8")
     request = urllib.request.Request(
         f"{STATE['server']}/api/garmin/accounts/pair",
         data=payload,
@@ -356,6 +668,27 @@ def upload_token(token_json: str) -> tuple[str, str]:
     return "error", str(body.get("message") or "平台拒绝了这次绑定。")
 
 
+def retry_upload_page(message: str = "") -> bytes:
+    return page(f"""
+    <h1>Garmin 已登录，等待平台绑定</h1>
+    <div class="note">{html.escape(message)}</div>
+    <div class="note">令牌仅在本机内存保留 5 分钟。配对码若过期，请回平台领取新码后提交，
+    无需再次输入 Garmin 密码。</div>
+    <form method="post" action="/{STATE["path_token"]}/upload">
+      <label>配对码</label>
+      <input name="code" autocomplete="off" required>
+      <button type="submit">重新提交令牌</button>
+    </form>
+    """)
+
+
+class HelperServer(HTTPServer):
+    # 单用户工具串行处理表单，让 Playwright 创建、MFA、关闭始终在同一线程。
+    # ThreadingHTTPServer 会导致第二次请求访问前一线程的 Playwright 对象而崩溃。
+    def service_actions(self):
+        expire_pending()
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "TrainingPlanPairHelper"
 
@@ -364,43 +697,75 @@ class Handler(BaseHTTPRequestHandler):
         return
 
     def _authorized(self) -> bool:
-        return self.path.startswith(f"/{STATE['path_token']}/") or \
-            self.path == f"/{STATE['path_token']}"
+        return (
+            self.path.startswith(f"/{STATE['path_token']}/")
+            or self.path == f"/{STATE['path_token']}"
+        )
 
     def _send(self, body: bytes, status: int = 200) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):  # noqa: N802 - 覆写基类方法
         if not self._authorized():
-            self._send(page("<h1>链接无效</h1><div class='note err'>"
-                            "请使用启动时打开的地址。</div>"), status=403)
+            self._send(
+                page("<h1>链接无效</h1><div class='note err'>请使用启动时打开的地址。</div>"),
+                status=403,
+            )
             return
-        self._send(form_page())
+        expire_pending()
+        if STATE["pending_token"]:
+            self._send(retry_upload_page())
+        elif STATE["pending_state"] is not None:
+            self._send(mfa_page())
+        else:
+            self._send(form_page())
 
     def do_POST(self):  # noqa: N802 - 覆写基类方法
         if not self._authorized():
             self._send(page("<h1>链接无效</h1>"), status=403)
             return
 
-        length = int(self.headers.get("Content-Length") or 0)
+        expire_pending()
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self._send(page("<h1>请求无效</h1>"), status=400)
+            return
+        if not 0 < length <= 16_384:
+            self._send(page("<h1>请求过大或为空</h1>"), status=400)
+            return
         fields = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
 
-        if self.path.endswith("/mfa"):
+        if self.path == f"/{STATE['path_token']}/mfa":
             self._handle_mfa(fields)
-        else:
+        elif self.path == f"/{STATE['path_token']}/upload":
+            self._handle_upload(fields)
+        elif self.path == f"/{STATE['path_token']}/bind":
             self._handle_bind(fields)
+        else:
+            self._send(page("<h1>链接无效</h1>"), status=404)
 
     def _handle_bind(self, fields: dict) -> None:
+        if STATE["pending_token"]:
+            self._send(retry_upload_page())
+            return
+        if STATE["pending_state"] is not None:
+            self._send(mfa_page("请先完成当前账号的验证，或等待会话过期。"))
+            return
         code = (fields.get("code") or [""])[0].strip().upper()
         email = (fields.get("email") or [""])[0].strip()
         password = (fields.get("password") or [""])[0]
         region = (fields.get("region") or ["GLOBAL"])[0]
 
+        if region not in {"GLOBAL", "CN"}:
+            self._send(form_page("站点无效。", error=True))
+            return
         STATE.update({"code": code, "email": email, "region": region})
         if not code or not email:
             self._send(form_page("配对码和邮箱都要填。", error=True))
@@ -438,9 +803,23 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         mfa_code = (fields.get("mfa") or [""])[0].strip()
+        if not mfa_code:
+            self._send(mfa_page("请输入验证码。"))
+            return
         try:
             client.resume_login(client_state, mfa_code)
+        except BrowserMfaInvalid as exception:
+            self._send(mfa_page(str(exception)))
+            return
+        except BrowserLoginError as exception:
+            clear_pending()
+            self._send(fail_page(str(exception)))
+            return
         except Exception as exception:  # noqa: BLE001
+            if isinstance(client, BrowserLogin):
+                clear_pending()
+                self._send(fail_page("浏览器会话中断，请重新开始登录。"))
+                return
             # 验证码错误时保留会话，允许重试
             self._send(mfa_page(f"验证码不正确或已过期，请重试。（{type(exception).__name__}）"))
             return
@@ -450,28 +829,70 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send_finish(self, client) -> None:
         outcome, message = finish_login(client)
-        # 绑定结束后立刻丢掉客户端与登录会话，不在内存里留存
-        STATE["pending_client"] = None
-        STATE["pending_state"] = None
         if outcome == "ok":
+            clear_pending()
+            self._send(done_page(None, message))
+        elif STATE["pending_token"]:
+            self._send(retry_upload_page(message))
+        else:
+            clear_pending()
+            self._send(fail_page(message))
+
+    def _handle_upload(self, fields: dict) -> None:
+        if not STATE["pending_token"]:
+            self._send(fail_page("本机令牌已过期，请重新登录。"))
+            return
+        code = (fields.get("code") or [""])[0].strip().upper()
+        if not code:
+            self._send(retry_upload_page("请输入新的配对码。"))
+            return
+        STATE["code"] = code
+        outcome, message = upload_token(str(STATE["pending_token"]))
+        if outcome == "ok":
+            clear_pending()
             self._send(done_page(None, message))
         else:
-            self._send(fail_page(message))
+            self._send(retry_upload_page(message))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="在本地换取 Garmin 令牌并交给平台完成绑定。")
-    parser.add_argument("--server", default=DEFAULT_SERVER,
-                        help=f"平台地址，默认 {DEFAULT_SERVER}")
-    parser.add_argument("--port", type=int, default=0,
-                        help="本地监听端口，默认自动选择空闲端口")
+    parser.add_argument("--server", default=DEFAULT_SERVER, help=f"平台地址，默认 {DEFAULT_SERVER}")
+    parser.add_argument("--port", type=int, default=0, help="本地监听端口，默认自动选择空闲端口")
     parser.add_argument("--no-browser", action="store_true", help="不要自动打开浏览器")
-    parser.add_argument("--token-file", default="",
-                        help="已有一个 Garmin 令牌 JSON 时直接交回平台，不再登录 Garmin")
+    parser.add_argument(
+        "--login-method",
+        choices=("browser", "http"),
+        default="browser",
+        help="登录方式：默认 Playwright 浏览器；http 保留原登录策略供排障",
+    )
+    parser.add_argument(
+        "--headed", action="store_true", help="显示 Garmin 浏览器窗口以完成人机验证"
+    )
+    parser.add_argument(
+        "--browser-channel",
+        choices=("chromium", "chrome", "msedge"),
+        default="chromium",
+        help="使用的 Chromium 浏览器，默认 chromium",
+    )
+    parser.add_argument(
+        "--token-file", default="", help="已有一个 Garmin 令牌 JSON 时直接交回平台，不再登录 Garmin"
+    )
     args = parser.parse_args()
 
     try:
-        import garminconnect  # noqa: F401 - 只做依赖检查
+        if not args.token_file:
+            from importlib.metadata import version
+
+            import garminconnect  # noqa: F401 - 只做依赖检查
+
+            if version("garminconnect") != "0.3.16":
+                print(
+                    "请在助手环境安装 garminconnect==0.3.16，以匹配平台令牌格式。", file=sys.stderr
+                )
+                return 2
+            if args.login_method == "browser":
+                import playwright.sync_api  # noqa: F401 - 仅浏览器登录需要
     except ImportError:
         if not args.token_file:
             print(DEPENDENCY_HINT, file=sys.stderr)
@@ -480,8 +901,11 @@ def main() -> int:
     STATE["server"] = args.server.rstrip("/")
     STATE["path_token"] = secrets.token_urlsafe(12)
     STATE["token_file"] = args.token_file
+    STATE["login_method"] = args.login_method
+    STATE["headed"] = args.headed
+    STATE["browser_channel"] = args.browser_channel
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    httpd = HelperServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{httpd.server_address[1]}/{STATE['path_token']}/"
     print("Garmin 绑定助手已启动")
     print(f"  平台地址：{STATE['server']}")
@@ -493,6 +917,9 @@ def main() -> int:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\n已退出")
+    finally:
+        clear_pending()
+        httpd.server_close()
     return 0
 
 

@@ -293,14 +293,17 @@ onMounted(loadAccounts);
       </template>
       <el-alert type="info" :closable="false" class="binding-intro" show-icon>
         <template #default>
-          Garmin 会限制云服务器登录。桌面助手在你的电脑上完成认证，密码不会经过本平台；
+          Garmin
+          会限制云服务器登录。桌面助手在你的电脑上完成认证，密码不会经过本平台；
           绑定成功后只将可撤销的登录令牌加密保存。
         </template>
       </el-alert>
       <div class="binding-consent">
         <el-checkbox v-model="sensitiveDataConsent" class="legal-consent">
           我单独同意平台按
-          <router-link to="/legal/privacy" target="_blank">《隐私政策》</router-link>
+          <router-link to="/legal/privacy" target="_blank"
+            >《隐私政策》</router-link
+          >
           处理我的健康与训练数据，用于同步、恢复评估和训练计划。
         </el-checkbox>
       </div>
@@ -511,44 +514,52 @@ onMounted(loadAccounts);
           <a :href="PAIR_HELPER_URL" :download="PAIR_HELPER_FILE">{{
             PAIR_HELPER_FILE
           }}</a>
-          ，在它所在目录执行（需要 Python 3.10+；依赖装在临时环境里，
+          ，在它所在目录执行（需要 Python 3.12+；依赖装在独立环境里，
           不会动你的系统 Python）
-          <pre class="pair-cmd">python3 -m venv .venv && .venv/bin/pip install -q garminconnect cloudscraper
+          <pre class="pair-cmd">
+python3 -m venv .venv
+.venv/bin/python -m pip install garminconnect==0.3.16 playwright
+.venv/bin/python -m playwright install chromium
 .venv/bin/python garmin_pair_helper.py</pre>
           <span class="pair-hint"
-            >Windows 把路径换成 <code>.venv\Scripts\pip</code> 与
-            <code>.venv\Scripts\python</code>；macOS 上直接 <code>pip install</code>
-            会报 externally-managed-environment，用上面这两行即可。装了 uv
-            的话一条就够：<code
-              >uv run --python 3.12 --with garminconnect --with cloudscraper python
-              garmin_pair_helper.py</code
-            ></span
+            >Windows 把 Python 路径换成 <code>.venv\Scripts\python</code>。
+            首次需下载浏览器，完成安装后再领取配对码。
+            遇到人机验证时，运行命令加 <code>--headed</code>，在打开的 Garmin
+            窗口中完成验证。</span
           >
         </li>
         <li>
-          双击运行它，把下面这个配对码填进去
+          助手启动后，把下面这个配对码填进去
           <div class="pair-code-row">
             <span class="pair-code">{{ pairCode }}</span>
-            <el-button link type="primary" @click="copyPairCode">复制</el-button>
+            <el-button link type="primary" @click="copyPairCode"
+              >复制</el-button
+            >
           </div>
           <span class="pair-hint"
-            >配对码 {{ Math.round(pairSeconds / 60) }} 分钟内有效，只能用一次</span
+            >配对码
+            {{ Math.round(pairSeconds / 60) }} 分钟内有效，只能用一次</span
           >
         </li>
-        <li>在助手里填 Garmin 邮箱、密码（需要时再填验证码），点「开始绑定」</li>
+        <li>在助手里填 Garmin 邮箱、密码，点「开始绑定」，按提示填写验证码</li>
         <li>助手提示成功后，这个窗口会自动关闭并刷新账号列表</li>
       </ol>
 
       <el-alert type="warning" :closable="false" class="import-hint">
         <template #default>
-          同一个网络下 Garmin 只允许很少的登录次数：密码输错一次可能就要等几分钟
-          再试，请不要连续点击。
+          浏览器登录仍可能遇到 Garmin
+          限流，请不要连续点击。若登录成功后配对码已过期，
+          领取新码并在助手里重新提交即可，无需再次登录 Garmin。
         </template>
       </el-alert>
 
       <template #footer>
         <el-button @click="pairDialogVisible = false">关闭</el-button>
-        <el-button type="primary" :loading="pairLoading" @click="openPairDialog">
+        <el-button
+          type="primary"
+          :loading="pairLoading"
+          @click="openPairDialog"
+        >
           重新获取配对码
         </el-button>
       </template>

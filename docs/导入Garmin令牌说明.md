@@ -6,21 +6,23 @@
 
 | 方式 | 你要做的事 | 说明 |
 |---|---|---|
-| **桌面助手（推荐）** | 在平台页面上领一个配对码 → 双击运行助手 → 填配对码、Garmin 邮箱、密码 | 助手会自己把令牌交回平台，**你不需要看到或复制令牌** |
-| 手动导入 | 跑脚本取得令牌 → 复制那一整段 JSON → 粘到平台的「导入令牌」 | 助手跑不起来（比如没装 Python）时用这条 |
+| **桌面助手（推荐）** | 运行助手 → 领取配对码 → 本机浏览器登录 Garmin | 助手会自己把令牌交回平台，**你不需要看到或复制令牌** |
+| 手动导入 | 跑脚本取得令牌 → 复制那一整段 JSON → 粘到平台的「导入令牌」 | 已持有令牌或需要手动传递时使用（也需要 Python） |
 
 下面是两种方式的详细步骤。
 
 ## 方式一：桌面助手
 
-1. 打开平台的「Garmin 账号」页，点「用桌面助手绑定」，页面上会出现一个 8 位配对码（5 分钟内有效，只能用一次）
+1. 打开平台的「Garmin 账号」页，点「用桌面助手绑定」。先完成下面的安装，再领取新的配对码（8 位、5 分钟有效、只能用一次）。
 2. 下载助手：[`garmin_pair_helper.py`](../web/public/garmin_pair_helper.py)，或直接在浏览器里打开同名的下载链接
-3. 在助手所在目录跑起来。**依赖装在临时环境里，不会动你的系统 Python**：
+3. 在助手所在目录跑起来。**依赖装在独立环境里，不会动你的系统 Python**：
 
-   macOS / Linux（需要 Python 3.10+）：
+   macOS / Linux（需要 Python 3.12+）：
 
    ```bash
-   python3 -m venv .venv && .venv/bin/pip install -q garminconnect cloudscraper
+   python3 -m venv .venv
+   .venv/bin/python -m pip install garminconnect==0.3.16 playwright
+   .venv/bin/python -m playwright install chromium
    .venv/bin/python garmin_pair_helper.py
    ```
 
@@ -28,14 +30,16 @@
 
    ```bat
    python -m venv .venv
-   .venv\Scripts\pip install garminconnect cloudscraper
+   .venv\Scripts\python -m pip install garminconnect==0.3.16 playwright
+   .venv\Scripts\python -m playwright install chromium
    .venv\Scripts\python garmin_pair_helper.py
    ```
 
-   已经装了 [uv](https://docs.astral.sh/uv/) 的话一条命令就够：
+   已经装了 [uv](https://docs.astral.sh/uv/) 可执行：
 
    ```bash
-   uv run --python 3.12 --with garminconnect --with cloudscraper python garmin_pair_helper.py
+   uv run --python 3.12 --with playwright python -m playwright install chromium
+   uv run --python 3.12 --with garminconnect==0.3.16 --with playwright python garmin_pair_helper.py
    ```
 
    > **不要在 macOS 上直接 `pip install`**：Homebrew / 系统自带的 Python 有 PEP 668 保护，
@@ -48,7 +52,19 @@
 
 助手只监听本机（`127.0.0.1`），每次运行都会换一个随机地址；**密码只在本机内存里用于登录 Garmin，不会发给平台**。
 
-如果提示「被 Garmin 拦住了」或「Garmin 正在限流」，说明这个网络刚才登录次数太多了：等 15~30 分钟，或者换一个网络（手机热点常常有效）再试。
+助手默认使用无头 Chromium，登录、验证码提交、令牌兑换都由浏览器网络栈发起，
+不会自动退回 requests。浏览器能执行登录页 JavaScript，但不能保证解除 Cloudflare 风控或 IP 限流。
+
+- 遇到 CAPTCHA / 403：加 `--headed` 启动，在出现的 Garmin 窗口中完成人机验证。
+- 想用已安装的 Chrome：加 `--browser-channel chrome`，无需下载 Chromium。
+- 浏览器未安装：在运行助手的同一个环境执行 `python -m playwright install chromium`。
+- 返回 429：本次停止请求，并在助手中冷却 15 分钟；不要连续重试。
+- 登录成功但配对码过期：回平台重新领码，再在助手中提交。令牌在内存保留 5 分钟，
+  无需再次登录；绑定成功或超时后清除，浏览器在取得令牌后关闭。
+- 原 HTTP 登录仅供排障：安装 `cloudscraper` 并加 `--login-method http`。它仍可能遇到原来的 429/403。
+
+`--no-browser` 只禁止自动打开助手表单，不会关闭登录用的 Chromium。
+密码会通过 HTTPS 发给 Garmin，**不会发给平台**；不保存浏览器配置、HAR、trace 或截图。
 
 ## 方式二：手动导入令牌
 
@@ -59,13 +75,13 @@
 平台的服务器只有一个出口 IP，所有用户共用。Garmin 对登录端点按 IP 限流，还可能弹出
 Cloudflare 人机挑战，在服务器上直接登录容易失败，而且一个人失败会连带其他人一起被限流。
 
-改成**在你自己电脑上登录**，走的是你熟悉的网络，成功率高得多，而且**密码始终不出本机** ——
+改成**在你自己电脑上登录**，走的是你熟悉的网络，成功率高得多，而且**密码只通过 HTTPS 发给 Garmin，不发给平台** ——
 只有登录产生的令牌会交给平台。
 
 ### 准备工作
 
 - 一台能上网的电脑（Windows / macOS / Linux 都行）
-- 已安装 Python 3.10 或更高版本（终端执行 `python3 --version` 能看到版本号即可）
+- 已安装 Python 3.12 或更高版本（终端执行 `python3 --version` 能看到版本号即可）
 - 你的 Garmin 账号和密码
 
 ### 具体步骤
@@ -82,8 +98,8 @@ python3 -m venv .venv
 
 Windows 把第二行换成 `.venv\Scripts\pip install garminconnect cloudscraper`。
 
-`cloudscraper` 用来自动通过 Cloudflare 挑战，建议装上（平台服务器端也是这么做的）；
-没装也能跑，只是遇到人机挑战时更容易失败。
+`cloudscraper` 是旧 HTTP 路径的可选辅助依赖，无法保证通过托管挑战或 CAPTCHA。
+遇到 403/429 时优先使用上面的 Playwright 桌面助手。
 
 #### 2. 运行脚本
 
@@ -171,6 +187,10 @@ Garmin 账号跑一遍本脚本、导入自己的令牌。同一个 Garmin 账�
   `<base>/garmin_pair_helper.py`，前端用 `import.meta.env.BASE_URL` 拼下载地址。
   它只监听 `127.0.0.1`，每次运行生成随机路径前缀（`/<token>/`）作为访问凭据 ——
   本机 Web 服务如果只靠端口，任何网页都能通过 127.0.0.1 扫端口提交表单。
+  默认使用 Playwright；固定 `garminconnect==0.3.16`，要求 Python 3.12+。
+  仅导出上游支持的 `di_token` / `di_refresh_token` / `di_client_id`，不导出 JWT_WEB Cookie。
+  本机 HTTP 服务串行处理请求，确保 Playwright 跨 MFA 请求仍由同一线程操作；
+  闲置 MFA 会话和待交付令牌在 5 分钟后释放。
   支持 `--token-file` 直接交回已有令牌（不登录 Garmin），便于排障与自动化验证。
 - 平台侧新增：`POST /api/garmin/accounts/pair-code`（需登录，签发一次性配对码）与
   `POST /api/garmin/accounts/pair`（**免登录**，凭配对码回传令牌）。配对码存 Redis

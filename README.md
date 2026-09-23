@@ -89,6 +89,14 @@ Garmin 会对登录端点做 IP 级限流。一旦登录被限流或遇到 Cloud
 
 设置 `COLLECTOR_DISABLE_CLOUDFLARE_BYPASS=1` 可关闭该绕过，用于定位问题是否由它引入。注意 cloudscraper 只能处理经典的 IUAM JS 挑战，Garmin 若改用 CAPTCHA 或托管挑战则会失效——实测已遇到过一次 `CAPTCHA required (bot challenge)`。
 
+桌面助手 `web/public/garmin_pair_helper.py` 现在默认使用 Playwright Chromium，在本机浏览器中
+完成登录、MFA 和 DI 令牌兑换；密码只通过 HTTPS 发给 Garmin。需要 Python 3.12+、
+`garminconnect==0.3.16`、`playwright`，并运行 `python -m playwright install chromium`。
+遇到人机验证时加 `--headed` 显示浏览器窗口，也可加 `--browser-channel chrome` 使用本机 Chrome。
+浏览器模式不会自动回退 HTTP 策略；浏览器不能保证解除 IP 限流，429 时会停止并冷却。
+配对码过期后，令牌可在本机内存中保留 5 分钟供换码重传。
+安装与使用步骤见 [导入 Garmin 令牌说明](docs/导入Garmin令牌说明.md)。
+
 ## Garmin 账号接口
 
 以下接口都只作用于当前登录用户自己的账号：
