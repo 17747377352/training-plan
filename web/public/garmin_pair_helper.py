@@ -32,6 +32,7 @@ import html
 import json
 import logging
 import pathlib
+import re
 import secrets
 import sys
 import time
@@ -41,8 +42,24 @@ import urllib.request
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from logging.handlers import RotatingFileHandler
 
 DEFAULT_SERVER = "https://songtop.xyz/planapi"
+DIAGNOSTICS = logging.getLogger("garmin-pair-helper")
+
+
+def configure_diagnostics(log_file: pathlib.Path):
+    """只接收本文件显式输出的阶段摘要，不接入第三方库的原始日志。"""
+    log_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    log_file.touch(mode=0o600, exist_ok=True)
+    log_file.chmod(0o600)
+    handler = RotatingFileHandler(log_file, maxBytes=256_000, backupCount=1, encoding="utf-8")
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    DIAGNOSTICS.setLevel(logging.INFO)
+    DIAGNOSTICS.propagate = False
+    for output in (handler, logging.StreamHandler()):
+        output.setFormatter(formatter)
+        DIAGNOSTICS.addHandler(output)
 
 DEPENDENCY_HINT = """
 缺少登录依赖。请使用 Python 3.12+，在独立环境安装：
@@ -230,6 +247,8 @@ class BrowserLogin:
         self.result = None
         self.mfa_method = "email"
         self.token = None
+        self.stage = "init"
+        self._secrets = []
         # 与现有 finish_login(client.client.dumps()) 的接口兼容。
         self.client = self
 
@@ -244,6 +263,34 @@ class BrowserLogin:
                 self.runtime.stop()
         self.page = self.context = self.browser = self.runtime = None
         self.result = self.token = None
+        self._secrets.clear()
+
+    def _stage(self, name):
+        self.stage = name
+        DIAGNOSTICS.info("stage=%s", name)
+
+    def _response_summary(self, result):
+        # 只读取协议状态与票据是否存在，不打印正文、URL、表单或 Cookie。
+        body = result.get("body")
+        body = body if isinstance(body, dict) else {}
+        status = body.get("responseStatus")
+        status = status.get("type") if isinstance(status, dict) else None
+        if status is None:
+            status = "MISSING"
+        elif not isinstance(status, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", status):
+            status = "UNRECOGNIZED"
+        elif any(
+            isinstance(secret, str) and secret and secret in status
+            for secret in [*self._secrets, body.get("serviceTicketId")]
+        ):
+            status = "REDACTED"
+        http_status = result.get("status")
+        http_status = http_status if type(http_status) is int else "unknown"
+        return (
+            f"HTTP={http_status} responseStatus={status} "
+            f"json={'yes' if isinstance(result.get('body'), dict) else 'no'} "
+            f"ticket={'yes' if bool(body.get('serviceTicketId')) else 'no'}"
+        )
 
     def _capture_response(self, response):
         parsed = urllib.parse.urlsplit(response.url)
@@ -252,11 +299,14 @@ class BrowserLogin:
             "/portal/api/mfa/verifyCode",
         }:
             return
+        if response.request.method != "POST":
+            return
         try:
             body = response.json()
         except Exception:
             body = None
         self.result = {"status": response.status, "body": body}
+        DIAGNOSTICS.info("stage=sso_response %s", self._response_summary(self.result))
 
     def _hold_ticket(self, route):
         # CAS 票据只能兑换一次，阻止官网先用它换成无法导入的 JWT_WEB Cookie。
@@ -273,6 +323,8 @@ class BrowserLogin:
         from playwright.sync_api import TimeoutError as PlaywrightTimeout
         from playwright.sync_api import sync_playwright
 
+        self._secrets = [email, password]
+        self._stage("browser_launch")
         self.runtime = sync_playwright().start()
         try:
             self.browser = self.runtime.chromium.launch(
@@ -290,10 +342,13 @@ class BrowserLogin:
         self.page.on("response", self._capture_response)
         self.page.route(self.service + "**", self._hold_ticket)
         signin = self.sso + "/portal/sso/en-US/sign-in?" + urllib.parse.urlencode(self.params)
+        self._stage("signin_navigation")
         response = self.page.goto(signin, wait_until="domcontentloaded", timeout=45_000)
+        DIAGNOSTICS.info("stage=signin_loaded HTTP=%s", response.status if response else "none")
         if response and response.status == 429:
             self._rate_limited()
         try:
+            self._stage("form_wait")
             # 使用官网表单，使其 JavaScript 和 CAPTCHA token 参与提交。
             # 有窗口模式给用户留出时间在官网完成人机验证。
             password_field = self.page.locator('input[type="password"]').first
@@ -307,6 +362,7 @@ class BrowserLogin:
                 'input[name="username"], input[type="email"], input#username'
             ).first.fill(email)
             password_field.fill(password)
+            self._stage("form_submit")
             self.page.locator('button[type="submit"], input[type="submit"]').first.click(
                 no_wait_after=True,
             )
@@ -316,14 +372,16 @@ class BrowserLogin:
                 "请使用 --headed 打开可见窗口后再试；不要连续重试。"
             ) from None
         deadline = time.monotonic() + (120 if self.headed else 45)
+        self._stage("login_result")
         while time.monotonic() < deadline:
             if self.result is not None:
                 result, self.result = self.result, None
                 body = result.get("body") or {}
+                response_status = body.get("responseStatus") if isinstance(body, dict) else None
                 if (
                     self.headed
-                    and isinstance(body, dict)
-                    and body.get("responseStatus", {}).get("type") == "CAPTCHA_REQUIRED"
+                    and isinstance(response_status, dict)
+                    and response_status.get("type") == "CAPTCHA_REQUIRED"
                 ):
                     # 有窗口模式由用户在官方页面解题，不自动重放密码。
                     continue
@@ -341,11 +399,16 @@ class BrowserLogin:
     def _accept_result(self, result, *, mfa=False):
         body = result.get("body")
         body = body if isinstance(body, dict) else {}
-        if result["status"] == 429 or str(body.get("error", {}).get("status-code")) == "429":
+        summary = self._response_summary(result)
+        DIAGNOSTICS.info("stage=%s %s", "mfa_result" if mfa else "login_result", summary)
+        error = body.get("error")
+        error = error if isinstance(error, dict) else {}
+        if result["status"] == 429 or str(error.get("status-code")) == "429":
             self._rate_limited()
         if result["status"] == 403:
             raise BrowserLoginError("Garmin 拒绝了浏览器请求（403）。请用 --headed 完成人机验证。")
-        status = body.get("responseStatus", {}).get("type")
+        status = body.get("responseStatus")
+        status = status.get("type") if isinstance(status, dict) else None
         if status == "SUCCESSFUL" and isinstance(body.get("serviceTicketId"), str):
             self._exchange_ticket(body["serviceTicketId"])
             return None, None
@@ -358,7 +421,10 @@ class BrowserLogin:
             raise BrowserLoginError("Garmin 要求人机验证，请使用 --headed 在官方页面中完成。")
         if mfa and result["status"] in {200, 400, 401, 422}:
             raise BrowserMfaInvalid("验证码不正确或已过期，请重新输入；会话仍保留在本机。")
-        raise BrowserLoginError(f"Garmin 登录未完成（HTTP {result['status']}），请稍后再试。")
+        raise BrowserLoginError(
+            "Garmin 返回了助手尚未识别的登录结果。"
+            f"诊断：{summary}。请提供这段诊断文字，以便确定下一步。"
+        )
 
     @staticmethod
     def _fetch(page, url, *, headers, body):
@@ -384,6 +450,8 @@ class BrowserLogin:
         )
 
     def resume_login(self, _state, code):
+        self._secrets.append(code)
+        self._stage("mfa_submit")
         result = self._fetch(
             self.page,
             self.sso + "/portal/api/mfa/verifyCode?" + urllib.parse.urlencode(self.params),
@@ -404,11 +472,14 @@ class BrowserLogin:
 
     def _exchange_ticket(self, ticket):
         # 在 DI 域名内进行同源兑换，避免 SSO -> DI 跨域 CORS 限制；不回退到 requests。
+        self._secrets.append(ticket)
+        self._stage("di_navigation")
         token_page = self.context.new_page()
         response = token_page.goto(self.token_url, wait_until="domcontentloaded", timeout=30_000)
         if response and response.status == 429:
             self._rate_limited()
         for client_id in self.client_ids:
+            self._stage("di_exchange")
             result = self._fetch(
                 token_page,
                 self.token_url,
@@ -427,6 +498,7 @@ class BrowserLogin:
             )
             if result["status"] == 429:
                 self._rate_limited()
+            DIAGNOSTICS.info("stage=di_result HTTP=%s", result["status"])
             body = result.get("body")
             body = body if isinstance(body, dict) else {}
             if result["status"] == 200 and all(
@@ -445,6 +517,7 @@ class BrowserLogin:
                     "di_refresh_token": body["refresh_token"],
                     "di_client_id": actual_client_id,
                 }
+                self._stage("token_ready")
                 return
             # 只有明确的 client_id 不兼容才尝试下一候选；403/网络错误不重放票据。
             if body.get("error") != "invalid_client":
@@ -483,8 +556,10 @@ def start_browser_login(email, password, region):
         return ("mfa" if needs_mfa else "ok"), None
     except BrowserLoginError as exception:
         message = str(exception)
+        DIAGNOSTICS.warning("stage=%s result=login_rejected %s", client.stage if client else "init", message)
     except ImportError:
         message = "缺少浏览器依赖，请安装 garminconnect==0.3.16 和 playwright。"
+        DIAGNOSTICS.warning("stage=init result=missing_dependency")
     except KeyboardInterrupt:
         if client is not None:
             client.close()
@@ -492,6 +567,7 @@ def start_browser_login(email, password, region):
     except Exception:
         # Playwright 异常含 fill 参数与带票据的 URL，绝不能原样展示或记录。
         message = "浏览器登录中断或网络超时，请检查浏览器窗口；可使用 --headed 重试。"
+        DIAGNOSTICS.warning("stage=%s result=browser_interrupted", client.stage if client else "init")
     if client is not None:
         client.close()
     return "error", message
@@ -642,6 +718,7 @@ def finish_login(client) -> tuple[str, str]:
 def upload_token(token_json: str) -> tuple[str, str]:
     """把令牌交给平台，由平台校验后加密入库。"""
 
+    DIAGNOSTICS.info("stage=platform_upload")
     payload = json.dumps(
         {
             "code": STATE["code"],
@@ -660,12 +737,16 @@ def upload_token(token_json: str) -> tuple[str, str]:
         with urllib.request.urlopen(request, timeout=180) as response:  # noqa: S310 - 地址由用户指定
             body = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exception:
+        DIAGNOSTICS.warning("stage=platform_upload HTTP=%s", exception.code)
         return "error", f"平台返回 HTTP {exception.code}，请确认平台地址是否正确。"
     except Exception as exception:  # noqa: BLE001
+        DIAGNOSTICS.warning("stage=platform_upload result=connection_failed")
         return "error", f"无法连接平台：{type(exception).__name__}: {str(exception)[:160]}"
 
     if body.get("code") == 200:
+        DIAGNOSTICS.info("stage=platform_upload result=bound")
         return "ok", "平台已接收令牌并完成绑定。"
+    DIAGNOSTICS.warning("stage=platform_upload result=rejected")
     return "error", str(body.get("message") or "平台拒绝了这次绑定。")
 
 
@@ -855,6 +936,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         except Exception as exception:  # noqa: BLE001
             if isinstance(client, BrowserLogin):
+                DIAGNOSTICS.warning("stage=%s result=browser_interrupted", client.stage)
                 clear_pending()
                 self._send(fail_page("浏览器会话中断，请重新开始登录。"))
                 return
@@ -899,6 +981,11 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=0, help="本地监听端口，默认自动选择空闲端口")
     parser.add_argument("--no-browser", action="store_true", help="不要自动打开浏览器")
     parser.add_argument(
+        "--log-file", type=pathlib.Path,
+        default=pathlib.Path.home() / ".training-plan" / "garmin-pair-helper.log",
+        help="本机诊断日志路径，仅记录阶段和状态，不记录凭据",
+    )
+    parser.add_argument(
         "--login-method",
         choices=("browser", "http"),
         default="browser",
@@ -917,6 +1004,11 @@ def main() -> int:
         "--token-file", default="", help="已有一个 Garmin 令牌 JSON 时直接交回平台，不再登录 Garmin"
     )
     args = parser.parse_args()
+    try:
+        configure_diagnostics(args.log_file)
+    except OSError:
+        print("无法创建诊断日志，请用 --log-file 指定可写路径。", file=sys.stderr)
+        return 2
 
     try:
         if not args.token_file:
@@ -948,6 +1040,7 @@ def main() -> int:
     print("Garmin 绑定助手已启动")
     print(f"  平台地址：{STATE['server']}")
     print(f"  本机页面：{url}")
+    print(f"  诊断日志：{args.log_file}")
     print("  按 Ctrl+C 退出")
     if not args.no_browser:
         webbrowser.open(url)

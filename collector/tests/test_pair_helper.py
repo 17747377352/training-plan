@@ -177,6 +177,61 @@ def test_playwright_errors_never_echo_credentials_or_ticket(helper, monkeypatch)
     close.assert_called_once()
 
 
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ({"responseStatus": {"type": "ACCOUNT_ACTION_REQUIRED"}}, "ACCOUNT_ACTION_REQUIRED"),
+        ({"responseStatus": None}, "MISSING"),
+        (None, "MISSING"),
+        ({"responseStatus": {"type": "https://example.invalid/?ticket=PRIVATE"}}, "UNRECOGNIZED"),
+        ({"responseStatus": {"type": "PRIVATE_PASSWORD"}}, "REDACTED"),
+        (
+            {"responseStatus": {"type": "PRIVATE_TICKET"}, "serviceTicketId": "PRIVATE_TICKET"},
+            "REDACTED",
+        ),
+    ],
+)
+def test_unknown_login_result_logs_only_safe_status(helper, caplog, body, expected):
+    session = helper.BrowserLogin("GLOBAL")
+    session._secrets = ["PRIVATE_PASSWORD"]
+    with caplog.at_level("INFO", logger="garmin-pair-helper"):
+        with pytest.raises(helper.BrowserLoginError) as failure:
+            session._accept_result({"status": 200, "body": body})
+    assert f"HTTP=200 responseStatus={expected}" in str(failure.value)
+    assert f"HTTP=200 responseStatus={expected}" in caplog.text
+    for secret in ("PRIVATE_PASSWORD", "PRIVATE_TICKET", "https://example.invalid"):
+        assert secret not in caplog.text + str(failure.value)
+
+
+def test_response_capture_ignores_preflight_and_never_logs_body(helper, caplog):
+    session = helper.BrowserLogin("GLOBAL")
+    response = SimpleNamespace(
+        url=session.sso + "/portal/api/login?ticket=private-query",
+        request=SimpleNamespace(method="OPTIONS"), status=200,
+        json=Mock(return_value={
+            "responseStatus": {"type": "SUCCESSFUL"},
+            "serviceTicketId": "private-ticket", "email": "private@example.invalid",
+            "access_token": "private-access", "refresh_token": "private-refresh",
+        }),
+    )
+    session._capture_response(response)
+    assert session.result is None
+    response.json.assert_not_called()
+    response.request.method = "POST"
+    with caplog.at_level("INFO", logger="garmin-pair-helper"):
+        session._capture_response(response)
+    assert session.result["body"]["serviceTicketId"] == "private-ticket"
+    assert "HTTP=200 responseStatus=SUCCESSFUL json=yes ticket=yes" in caplog.text
+    for secret in (
+        "private-ticket",
+        "private-query",
+        "private@example.invalid",
+        "private-access",
+        "private-refresh",
+    ):
+        assert secret not in caplog.text
+
+
 def test_browser_never_falls_back_to_http_on_error(helper, monkeypatch):
     monkeypatch.setattr(helper, "start_browser_login", lambda *args: ("error", "blocked"))
     http = Mock(side_effect=AssertionError("不应调用 HTTP 登录"))

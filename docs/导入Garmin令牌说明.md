@@ -62,6 +62,10 @@
 - 登录成功但配对码过期：回平台重新领码，再在助手中提交。令牌在内存保留 5 分钟，
   无需再次登录；绑定成功或超时后清除，浏览器在取得令牌后关闭。
 - 原 HTTP 登录仅供排障：安装 `cloudscraper` 并加 `--login-method http`。它仍可能遇到原来的 429/403。
+- 登录失败需排查：默认将阶段、HTTP 状态、Garmin `responseStatus` 及票据是否存在写入
+  `~/.training-plan/garmin-pair-helper.log`，同时输出到终端。可用 `--log-file PATH` 改路径。
+  日志不记录邮箱、密码、验证码、Cookie、票据或令牌正文；未知响应的诊断摘要也会显示在错误页。
+  HTTP 200 仅代表请求收到响应，不代表登录成功，需结合 Garmin 的业务状态判断。
 
 `--no-browser` 只禁止自动打开助手表单，不会关闭登录用的 Chromium。
 密码会通过 HTTPS 发给 Garmin，**不会发给平台**；不保存浏览器配置、HAR、trace 或截图。
