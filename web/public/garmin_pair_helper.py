@@ -39,7 +39,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DEFAULT_SERVER = "https://songtop.xyz/planapi"
 
@@ -682,15 +683,42 @@ def retry_upload_page(message: str = "") -> bytes:
     """)
 
 
-class HelperServer(HTTPServer):
-    # 单用户工具串行处理表单，让 Playwright 创建、MFA、关闭始终在同一线程。
-    # ThreadingHTTPServer 会导致第二次请求访问前一线程的 Playwright 对象而崩溃。
+class HelperServer(ThreadingHTTPServer):
+    """HTTP 并发接收；状态与 Playwright 生命周期由一个专用线程串行操作。
+
+    浏览器会预先建立不发送请求的 TCP 连接，单线程 HTTPServer 会被其永久阻塞。
+    不能把 Playwright 直接移到各 HTTP 线程，否则跨请求提交 MFA 会跨线程访问。
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.auth_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="garmin-auth")
+        self.expiry_check = None
+
+    def run_auth(self, action, *args):
+        return self.auth_worker.submit(action, *args).result()
+
     def service_actions(self):
-        expire_pending()
+        # 登录耗时较长时最多排队一次过期检查，不阻塞 HTTP accept 循环。
+        if self.expiry_check is None or self.expiry_check.done():
+            self.expiry_check = self.auth_worker.submit(expire_pending)
+
+    def server_close(self):
+        super().server_close()
+        # 初始化绑定端口失败时，父类也可能调用 server_close。
+        worker = getattr(self, "auth_worker", None)
+        if worker is not None:
+            try:
+                self.run_auth(clear_pending)
+            finally:
+                worker.shutdown(wait=True)
+                self.auth_worker = None
 
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "TrainingPlanPairHelper"
+    # 空连接或只发送了一半请求的连接到时关闭，不长期占用 HTTP 线程。
+    timeout = 10
 
     # 默认实现会把整个请求行写进控制台，其中含本次运行的随机路径，没必要
     def log_message(self, fmt, *args):  # noqa: A003 - 覆写基类方法
@@ -718,6 +746,9 @@ class Handler(BaseHTTPRequestHandler):
                 status=403,
             )
             return
+        self.server.run_auth(self._handle_get)
+
+    def _handle_get(self):
         expire_pending()
         if STATE["pending_token"]:
             self._send(retry_upload_page())
@@ -731,7 +762,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send(page("<h1>链接无效</h1>"), status=403)
             return
 
-        expire_pending()
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -740,8 +770,16 @@ class Handler(BaseHTTPRequestHandler):
         if not 0 < length <= 16_384:
             self._send(page("<h1>请求过大或为空</h1>"), status=400)
             return
-        fields = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
+        try:
+            fields = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
+        except UnicodeDecodeError:
+            self._send(page("<h1>请求编码无效</h1>"), status=400)
+            return
+        # 先在 HTTP 线程读完请求，再交给串行工作线程；半包不能阻塞登录会话。
+        self.server.run_auth(self._dispatch_post, fields)
 
+    def _dispatch_post(self, fields):
+        expire_pending()
         if self.path == f"/{STATE['path_token']}/mfa":
             self._handle_mfa(fields)
         elif self.path == f"/{STATE['path_token']}/upload":
@@ -918,7 +956,6 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\n已退出")
     finally:
-        clear_pending()
         httpd.server_close()
     return 0
 

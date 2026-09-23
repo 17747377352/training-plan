@@ -1,10 +1,14 @@
 """桌面助手回归测试；默认不触碰真实 Garmin 或平台。"""
 
+import http.client
 import importlib.util
 import json
 import os
+import socket
+import threading
 import time
 import urllib.parse
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -27,6 +31,104 @@ def helper():
     spec.loader.exec_module(module)
     yield module
     module.clear_pending()
+
+
+@contextmanager
+def helper_http_server(helper):
+    """实际 HTTP 连接测试，事件保证空连接已被服务器接收，避免靠 sleep 猜测。"""
+    accepted = threading.Event()
+
+    class TrackingHandler(helper.Handler):
+        def setup(self):
+            super().setup()
+            accepted.set()
+
+    helper.STATE["path_token"] = "synthetic-path"
+    server = helper.HelperServer(("127.0.0.1", 0), TrackingHandler)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+    thread.start()
+    try:
+        yield server, accepted
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+        server.server_close()
+
+
+def local_http_request(server, method="GET", path="/synthetic-path/", fields=None):
+    connection = http.client.HTTPConnection(*server.server_address, timeout=2)
+    try:
+        connection.request(
+            method,
+            path,
+            body=urllib.parse.urlencode(fields) if fields else None,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = connection.getresponse()
+        return response.status, response.read().decode()
+    finally:
+        connection.close()
+
+
+def test_browser_preconnect_does_not_block_other_http_requests(helper):
+    with helper_http_server(helper) as (server, accepted):
+        # 模拟 Chromium 只连 TCP、不发送 HTTP 请求行的预连接。
+        with socket.create_connection(server.server_address, timeout=2):
+            assert accepted.wait(timeout=2)
+            status, body = local_http_request(server)
+            assert status == 200
+            assert "绑定 Garmin 账号" in body
+
+
+@pytest.mark.parametrize("finish_login", [True, False])
+def test_browser_lifecycle_stays_on_one_thread_across_http_requests(
+    helper, monkeypatch, finish_login
+):
+    calls = []
+
+    def record(name):
+        calls.append((name, threading.get_ident()))
+
+    def login(self, email, password):
+        record("login")
+        return "needs_mfa", True
+
+    def resume(self, state, code):
+        record("mfa")
+
+    def dumps(self):
+        record("export")
+        return json.dumps(SYNTHETIC_TOKEN)
+
+    def close(self):
+        record("close")
+
+    monkeypatch.setattr(helper.BrowserLogin, "login", login)
+    monkeypatch.setattr(helper.BrowserLogin, "resume_login", resume)
+    monkeypatch.setattr(helper.BrowserLogin, "dumps", dumps)
+    monkeypatch.setattr(helper.BrowserLogin, "close", close)
+    monkeypatch.setattr(helper, "upload_token", lambda token: ("ok", "绑定成功"))
+    with helper_http_server(helper) as (server, _):
+        status, body = local_http_request(
+            server,
+            "POST",
+            "/synthetic-path/bind",
+            {
+                "code": "TESTCODE",
+                "email": "example@example.invalid",
+                "password": "synthetic",
+                "region": "GLOBAL",
+            },
+        )
+        assert status == 200 and "输入 Garmin 验证码" in body
+        if finish_login:
+            status, body = local_http_request(
+                server, "POST", "/synthetic-path/mfa", {"mfa": "123456"}
+            )
+            assert status == 200 and "绑定成功" in body
+    expected = ["login", "mfa", "export", "close"] if finish_login else ["login", "close"]
+    assert [name for name, _ in calls] == expected
+    assert len({thread_id for _, thread_id in calls}) == 1
 
 
 @pytest.mark.parametrize("region,domain", [("GLOBAL", "garmin.com"), ("CN", "garmin.cn")])
@@ -210,8 +312,12 @@ def test_idle_session_expires_and_closes_browser(helper):
         pending_token="synthetic",
         expires_at=time.monotonic() - 1,
     )
-    server = object.__new__(helper.HelperServer)
-    server.service_actions()
+    server = helper.HelperServer(("127.0.0.1", 0), helper.Handler)
+    try:
+        server.service_actions()
+        server.run_auth(lambda: None)
+    finally:
+        server.server_close()
     session.close.assert_called_once()
     assert helper.STATE["pending_client"] is None
     assert helper.STATE["pending_token"] is None

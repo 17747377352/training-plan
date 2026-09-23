@@ -189,7 +189,8 @@ Garmin 账号跑一遍本脚本、导入自己的令牌。同一个 Garmin 账�
   本机 Web 服务如果只靠端口，任何网页都能通过 127.0.0.1 扫端口提交表单。
   默认使用 Playwright；固定 `garminconnect==0.3.16`，要求 Python 3.12+。
   仅导出上游支持的 `di_token` / `di_refresh_token` / `di_client_id`，不导出 JWT_WEB Cookie。
-  本机 HTTP 服务串行处理请求，确保 Playwright 跨 MFA 请求仍由同一线程操作；
+  本机 HTTP 服务并发接收请求，避免浏览器预连接阻塞；登录、MFA 与资源释放
+  交给单个专用工作线程，确保 Playwright 始终由同一线程操作；
   闲置 MFA 会话和待交付令牌在 5 分钟后释放。
   支持 `--token-file` 直接交回已有令牌（不登录 Garmin），便于排障与自动化验证。
 - 平台侧新增：`POST /api/garmin/accounts/pair-code`（需登录，签发一次性配对码）与
