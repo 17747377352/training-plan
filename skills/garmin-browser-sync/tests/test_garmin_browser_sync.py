@@ -1,5 +1,8 @@
 """验证时间单位、隐私白名单、业务回执和断点补传这些真实失败边界。"""
 
+import argparse
+import contextlib
+import io
 import json
 import sqlite3
 import sys
@@ -259,6 +262,31 @@ class ScheduleTest(unittest.TestCase):
         decoded = runner.plistlib.loads(runner.plistlib.dumps(spec))
         self.assertEqual(spec["Label"], decoded["Label"])
         self.assertEqual(spec["ProgramArguments"], decoded["ProgramArguments"])
+
+    def test_install_refuses_an_unready_state_dir(self):
+        """未配对或没配密码时装上定时任务，只会得到每天静默失败的任务 —— 装载时就该报错。
+
+        卸载不能受这条限制：任务已经坏了还得能摘掉。
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            with patch.object(runner, "plist_path", return_value=state / "job.plist"), \
+                 patch.object(runner, "launchctl") as launchctl:
+                with self.assertRaisesRegex(runner.SyncError, "尚未配对"):
+                    runner.schedule(argparse.Namespace(label="com.example.job", hour=10, minute=30,
+                                                       print_only=False, uninstall=False), state)
+                self.assertFalse(launchctl.called, "未就绪时不应该碰 launchctl")
+                self.assertFalse((state / "job.plist").exists(), "未就绪时不应该写出 plist")
+                # 只写配对、没有密码 → 仍然拒绝
+                runner.write_private(state / "config.json",
+                                     {"server": "https://example.test", "uploadToken": "t"})
+                with self.assertRaisesRegex(runner.SyncError, "尚未配置本机 Garmin 密码"):
+                    runner.schedule(argparse.Namespace(label="com.example.job", hour=10, minute=30,
+                                                       print_only=False, uninstall=False), state)
+                # 卸载不受限制
+                with contextlib.redirect_stdout(io.StringIO()):
+                    runner.schedule(argparse.Namespace(label="com.example.job", print_only=False,
+                                                      uninstall=True), state)
 
 
 class UploadTest(unittest.TestCase):

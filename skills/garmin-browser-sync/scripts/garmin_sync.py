@@ -318,6 +318,8 @@ def schedule(args, state_dir):
         return
     if sys.platform != "darwin":
         raise SyncError("定时任务目前只支持 macOS launchd")
+    # 未配对或没配密码就装载，只会装出一个每天静默失败的任务：宁可在装载这一步就报错。
+    configured(state_dir, require_password=True)
     (state_dir / "logs").mkdir(parents=True, exist_ok=True)
     if target.exists():
         launchctl("bootout", label)

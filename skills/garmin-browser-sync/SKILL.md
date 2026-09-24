@@ -66,6 +66,26 @@ python3 garmin_sync.py schedule --uninstall        # 卸载
 `sync` 的取数范围：默认「今天减 3 天」到「昨天」，并会向前多看两天已上传日期以补缺口。只上传
 **完整日期**（当天不传，当天数据还在变）。`sync --since <日期>` 可指定更早的起点做回填。
 
+## 绑定到线上环境
+
+首次接线上平台：配对码只能在**已登录的平台页面**上生成，所以这一步要由本人操作。
+
+```bash
+# 1. 在 https://songtop.xyz/plan → Garmin 账号 → 用桌面助手绑定，取 8 位配对码（5 分钟有效）
+# 2. 一条命令完成配对 + 保存密码 + 复用已登录会话（密码用隐藏输入，不必写进命令历史）
+GARMIN_PAIR_CODE=<8位码> python3 garmin_sync.py setup \
+    --server https://songtop.xyz/planapi --email <Garmin 国际站邮箱> \
+    --session-from "<已有会话目录>"
+# 3. 已有本地数据时先零登录回填，不要为了补齐历史去重新登录 Garmin
+python3 garmin_sync.py upload --db "<已有 garmin.db>" --since 2026-09-12 --until 2026-09-24
+# 4. 确认无误后再挂定时
+python3 garmin_sync.py schedule --hour 10 --minute 30
+```
+
+`upload` 只读本地 SQLite，**不碰 Garmin 登录端点**，所以回填历史不消耗登录配额；
+真正需要取新数据时才用 `sync`。生产账号若此前是用令牌导入的，配对会把它切成浏览器来源
+（清掉服务器上的令牌），旧的服务端定时采集从此跳过该账号，这是设计如此。
+
 ## 关键设计
 
 - **配对换凭据**：一次性配对码换取只绑定一个账号的上传凭据（`storage/config.json`，600 权限），
