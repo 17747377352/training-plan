@@ -280,6 +280,21 @@ def test_manual_mode_keeps_window_open_on_403(helper, manual, headed, status, ex
 
 
 @pytest.mark.parametrize(
+    "result",
+    [
+        {"status": 429, "body": None},
+        {"status": 200, "body": {"error": {"status-code": "429"}}},
+    ],
+)
+def test_manual_mode_stops_for_rate_limit_instead_of_waiting(helper, result):
+    session = helper.BrowserLogin("GLOBAL", headed=True, manual=True)
+    assert session._should_keep_waiting(result["body"], result) is False
+    with pytest.raises(helper.BrowserLoginError, match="429"):
+        session._accept_result(result)
+    assert helper.STATE["cooldown_until"] > time.monotonic()
+
+
+@pytest.mark.parametrize(
     "manual,headed,expected",
     [
         # 手动登录要留足时间：用户得自己输邮箱密码、可能还要过人机验证和验证码
@@ -460,8 +475,16 @@ def test_idle_session_expires_and_closes_browser(helper):
 # 真 Chromium 测试：所有网络由 route 拦截，禁止接触真实账号或服务器。
 # PAIR_BROWSER_TESTS=1 uv run --frozen --with playwright pytest tests/test_pair_helper.py
 @pytest.mark.skipif(os.environ.get("PAIR_BROWSER_TESTS") != "1", reason="需显式启用本地 Chromium")
-@pytest.mark.parametrize("region,mfa", [("GLOBAL", False), ("CN", True)])
-def test_real_browser_login_mfa_exchange(helper, monkeypatch, region, mfa):
+@pytest.mark.parametrize(
+    "region,mfa,intermediate_type",
+    [
+        ("GLOBAL", False, None),
+        ("CN", True, None),
+        ("GLOBAL", False, "text/html"),
+        ("GLOBAL", False, "application/json"),
+    ],
+)
+def test_real_browser_login_mfa_exchange(helper, monkeypatch, region, mfa, intermediate_type):
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as runtime:
@@ -474,9 +497,10 @@ def test_real_browser_login_mfa_exchange(helper, monkeypatch, region, mfa):
         context = browser.new_context()
         observed = []
         mfa_attempt = 0
+        login_attempt = 0
 
         def route_request(route):
-            nonlocal mfa_attempt
+            nonlocal mfa_attempt, login_attempt
             request = route.request
             parsed = urllib.parse.urlsplit(request.url)
             observed.append((parsed.netloc, parsed.path, request.method))
@@ -493,17 +517,27 @@ def test_real_browser_login_mfa_exchange(helper, monkeypatch, region, mfa):
                       method:'POST', headers:{'Content-Type':'application/json'},
                       body:JSON.stringify({username:document.querySelector('[name=username]').value,
                         password:document.querySelector('[type=password]').value})});
-                    const data = await result.json();
+                    let data;
+                    try { data = await result.json(); } catch (_) {
+                      // 仅测试页面：模拟用户看到插页后再次提交，真实助手不重放凭据。
+                      setTimeout(() => document.querySelector('form').requestSubmit(), 200);
+                      return;
+                    }
                     if(data.serviceTicketId) location.href =
                       new URL(location.href).searchParams.get('service')
                         + '?ticket=' + data.serviceTicketId;
                   };</script>""",
                 )
             elif parsed.path == "/portal/api/login":
+                login_attempt += 1
                 assert request.post_data_json == {
                     "username": "synthetic@example.invalid",
                     "password": "synthetic-password",
                 }
+                if intermediate_type and login_attempt == 1:
+                    # HTTP 200 + 无法解析的正文；第二种复现日志中声称 JSON 却解析失败。
+                    route.fulfill(content_type=intermediate_type, body="<html>Verify first</html>")
+                    return
                 data = {
                     "responseStatus": {"type": "MFA_REQUIRED" if mfa else "SUCCESSFUL"},
                     "customerMfaInfo": {"mfaLastMethodUsed": "email"},
@@ -551,7 +585,7 @@ def test_real_browser_login_mfa_exchange(helper, monkeypatch, region, mfa):
             "playwright.sync_api.sync_playwright",
             lambda: SimpleNamespace(start=lambda: fake_runtime),
         )
-        session = helper.BrowserLogin(region)
+        session = helper.BrowserLogin(region, headed=bool(intermediate_type))
         try:
             result, state = session.login("synthetic@example.invalid", "synthetic-password")
             if mfa:
@@ -566,7 +600,8 @@ def test_real_browser_login_mfa_exchange(helper, monkeypatch, region, mfa):
             assert restored.di_refresh_token == "synthetic-refresh"
             # CAS 票据没有先被官网 /app 消耗。
             assert not any(path == "/app" for _, path, _ in observed)
-            assert sum(path == "/portal/api/login" for _, path, _ in observed) == 1
+            expected_attempts = 2 if intermediate_type else 1
+            assert sum(path == "/portal/api/login" for _, path, _ in observed) == expected_attempts
         finally:
             session.close()
             browser.close()

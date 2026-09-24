@@ -358,6 +358,12 @@ class BrowserLogin:
         """
         if not self.headed:
             return False
+        # 限流必须先交给 _accept_result 冷却，不能当成人机验证插页继续等待。
+        if isinstance(result, dict) and result.get("status") == 429:
+            return False
+        error = body.get("error") if isinstance(body, dict) else None
+        if isinstance(error, dict) and str(error.get("status-code")) == "429":
+            return False
         if not isinstance(body, dict):
             return True
         status = body.get("responseStatus")
@@ -465,7 +471,9 @@ class BrowserLogin:
         while time.monotonic() < deadline:
             if self.result is not None:
                 result, self.result = self.result, None
-                body = result.get("body") or {}
+                # 保留 None / 空数组等原始类型，供等待逻辑辨别无法解析的响应。
+                # 提前用空字典兜底会让「非 JSON 继续等待」分支永远无法接到 None。
+                body = result.get("body")
                 if self._should_keep_waiting(body, result):
                     # 有窗口（含手动）模式：等用户解题、或这条根本不是登录结果（Cloudflare
                     # 插页/403），都不能就此判失败 —— 更不能把用户正在用的窗口关掉。
