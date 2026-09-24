@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -287,6 +288,63 @@ class ScheduleTest(unittest.TestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     runner.schedule(argparse.Namespace(label="com.example.job", print_only=False,
                                                       uninstall=True), state)
+
+
+class SyncGuardTest(unittest.TestCase):
+    """定时任务无人看着跑，`sync` 的闸门就是「不许静默降级」的保证：
+
+    缺新鲜每日数据、活动列表请求失败，都必须报错并且**不推进检查点**，否则第二天会以为
+    这段已经同步过，缺口就永久留在那里。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = Path(self.tmp.name)
+        runner.write_private(self.state / "config.json", {
+            "server": "https://example.test", "uploadToken": "t", "garminPassword": "p",
+            "dataDir": str(self.state / "data")})
+        # 日期按真实「今天」推算：sync 只上传到昨天为止，写死日期会让用例过几天就失效
+        self.end = runner.date.today() - timedelta(days=1)
+        self.start = self.end - timedelta(days=2)
+        self.dates = [(self.start + timedelta(days=i)).isoformat() for i in range(3)]
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_sync(self, manifest):
+        with patch.object(runner, "capture", return_value=manifest), \
+             patch.object(runner, "upload_range", return_value={"jobIds": [7]}) as upload:
+            try:
+                runner.sync(argparse.Namespace(since=self.start.isoformat(), visible=False), self.state)
+            except runner.SyncError as error:
+                return upload, str(error)
+        return upload, None
+
+    def test_missing_daily_data_blocks_checkpoint(self):
+        upload, error = self.run_sync({"freshDailyDates": self.dates[:2],
+                                       "endpoints": {"activities": {"status": 200}}})
+        self.assertIn("未取得新鲜每日数据", error)
+        self.assertIn(self.dates[2], error)          # 缺的是哪一天要说清楚
+        self.assertFalse(upload.called, "缺数据时不该上传")
+        self.assertNotIn("lastFetchedDate", runner.read_json(self.state / "progress.json"))
+
+    def test_failed_activity_list_is_not_treated_as_no_activities(self):
+        """活动接口挂了会把「取数失败」伪装成「这几天没骑车」，必须拒绝而不是传空列表。"""
+        upload, error = self.run_sync({"freshDailyDates": self.dates,
+                                       "endpoints": {"activities": {"status": 500}}})
+        self.assertIn("活动列表本次取数失败", error)
+        self.assertFalse(upload.called)
+        self.assertNotIn("lastFetchedDate", runner.read_json(self.state / "progress.json"))
+
+    def test_complete_data_advances_checkpoint_and_uploads(self):
+        upload, error = self.run_sync({"freshDailyDates": self.dates,
+                                       "endpoints": {"activities": {"status": 200}}})
+        self.assertIsNone(error)
+        self.assertTrue(upload.called)
+        # 上传区间必须是「起点 ~ 昨天」：当天不传，因为当天数据还在变
+        self.assertEqual((self.start.isoformat(), self.end.isoformat()), upload.call_args[0][3:5])
+        self.assertEqual(self.end.isoformat(),
+                         runner.read_json(self.state / "progress.json")["lastFetchedDate"])
 
 
 class UploadTest(unittest.TestCase):

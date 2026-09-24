@@ -155,5 +155,6 @@ python3 -m unittest discover -s tests
 
 测试覆盖：真实睡眠形状与隐私字段剔除、UTC 时间换算（不受本机时区影响）、ACWR 两层嵌套
 （`latestTrainingStatusData[设备ID]`）、VO2max 按运动类型取骑行（且与入库顺序无关）、午睡数组、
-心率区间转置、设备 ID、定时 plist（不写死解释器路径、时间校验、能被 launchd 解析）、
+心率区间转置、设备 ID、`sync` 的三道闸门（缺新鲜每日数据、活动列表请求失败都不推进检查点）、
+定时 plist（不写死解释器路径、时间校验、能被 launchd 解析、未就绪时拒绝装载）、
 HTTP 200 + 业务失败不算成功、断点补传、坏回执不推进检查点、并发运行被拒。
