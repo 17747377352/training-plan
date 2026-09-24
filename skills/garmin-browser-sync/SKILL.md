@@ -152,6 +152,24 @@ python3 garmin_sync.py schedule --hour 10 --minute 30
 
 本 skill 自身的代码与文档不继承 AGPL，可另行授权。
 
+## 挂上之后怎么确认它真的在跑
+
+定时任务失败是**安静**的，所以装上以后要按下面三步留证据（都在一条命令的输出里）：
+
+```bash
+python3 garmin_sync.py doctor
+```
+
+1. `schedule.installed` 与 `schedule.loaded` 都必须是 true；只有 `installed` 为 true 说明
+   plist 写下了但没装载成功。
+2. `lastRun.ok` 为 true 且 `jobIds` 非空 —— 这是「平台真的收了数据」，不是「脚本跑完了」。
+3. `logTail` 里不该反复出现同一句错误。若出现「尚未配置本机 Garmin 密码」或
+   「平台连接失败」，按「失败模式与处置」处理；前者说明密码没配上，任务其实一直在空转。
+
+连续观察数天时，跨天确认 `progress.json` 的 `lastUploadedDate` 在往前推进：
+它只在整批入库成功后才前移，停在原地就说明有批次没成功（`pending` 会指向待补传的起点，
+直接 `upload` 即可续传，不必重新登录 Garmin）。
+
 ## 验证
 
 ```bash

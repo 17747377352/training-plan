@@ -208,6 +208,17 @@ Garmin 账号跑一遍本脚本、导入自己的令牌。同一个 Garmin 账�
 
 ## 维护者备注
 
+- **本机浏览器上传（另一条路，不经过令牌）**：服务端是 `POST /api/garmin/browser-upload/pair`
+  与 `/ingest`（都**免登录**，`SecurityConfig` 里逐个精确放行）、以及需登录的
+  `DELETE /api/garmin/browser-upload/credentials/{accountId}`。`pair` 复用同一批一次性配对码，
+  签发**账号专用上传凭据**，明文只在签发时返回一次，库里（V12 的 `browser_upload_credential`）
+  只存 SHA-256；`ingest` 校验凭据后复用现有去重入库，批次上限 31 天。
+  配对时若命中已有账号会调 `activateBrowserAccount` **清掉服务器上的 DI 令牌** ——
+  于是旧的服务端定时采集跳过该账号，这是有意的切换语义，不是 bug。
+  客户端是 `skills/garmin-browser-sync`（`prepare / setup / sync / upload / credentials /
+  doctor / schedule`），取数用反检测浏览器在本机完成，密码与会话都留在本机 `storage/`（已忽略）。
+  两条路可以并存，但**同一账号不要同时用**。许可证注意：上游 `garmin-givemydata` 是
+  AGPL-3.0-only，skill 只在运行时用 pip 装它，不要连 venv 或上游源码一起打包分发。
 - **助手（推荐路径）**：`web/public/garmin_pair_helper.py`，由 Vite 原样发布到
   `<base>/garmin_pair_helper.py`，前端用 `import.meta.env.BASE_URL` 拼下载地址。
   它只监听 `127.0.0.1`，每次运行生成随机路径前缀（`/<token>/`）作为访问凭据 ——
