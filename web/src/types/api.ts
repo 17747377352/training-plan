@@ -312,3 +312,54 @@ export interface TrainingGoalForm {
   weeklyMinutes?: number | null;
   description?: string | null;
 }
+
+/** 个人中心身体数据：各项都是「最新值」，因此都带生效日期。 */
+export interface ProfileOverview {
+  ftp: ProfileFtp | null;
+  training: ProfileTraining | null;
+  daily: ProfileDaily | null;
+  thresholdHr: ProfileThresholdHr[];
+  sleep: ProfileSleep | null;
+}
+
+export interface ProfileFtp {
+  watts: number | null;
+  effectiveDate: string | null;
+  /** GARMIN = 接口测得；DERIVED = 由 NP/IF 反解（本机浏览器路径）。 */
+  source: string | null;
+}
+
+export interface ProfileTraining {
+  vo2maxValue: number | null;
+  /** VO2max 自己的更新日期（它只在符合条件的骑行后才更新）。 */
+  vo2maxDate: string | null;
+  fitnessAge: number | null;
+  fitnessAgeDate: string | null;
+}
+
+export interface ProfileDaily {
+  averageStressLevel: number | null;
+  bodyBatteryHighest: number | null;
+  bodyBatteryLowest: number | null;
+  restingHeartRate: number | null;
+  calendarDate: string | null;
+}
+
+export interface ProfileThresholdHr {
+  /** RUNNING / CYCLING；Garmin 目前只提供跑步。 */
+  series: string;
+  heartRate: number | null;
+  effectiveDate: string | null;
+}
+
+export interface ProfileSleep {
+  calendarDate: string | null;
+  totalSeconds: number | null;
+  score: number | null;
+  deepSeconds: number | null;
+  lightSeconds: number | null;
+  remSeconds: number | null;
+  awakeSeconds: number | null;
+  startGmt: string | null;
+  endGmt: string | null;
+}

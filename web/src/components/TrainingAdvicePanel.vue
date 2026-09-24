@@ -369,12 +369,12 @@ onBeforeUnmount(() => {
           <template v-if="goal.weeklyMinutes">
             / {{ goal.weeklyMinutes }} 分钟
           </template>
-          <RouterLink class="advice-link" to="/settings">调整目标 →</RouterLink>
+          <RouterLink class="advice-link" to="/profile">调整目标 →</RouterLink>
         </template>
         <template v-else>
           还没有训练目标，生成计划只能给出通用安排。<RouterLink
             class="advice-link"
-            to="/settings"
+            to="/profile"
             >去设置训练目标 →</RouterLink
           >
         </template>

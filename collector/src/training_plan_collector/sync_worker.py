@@ -251,7 +251,11 @@ class SyncWorker:
             # 逐日查询返回的是那一天的快照（实测急性负荷随日期变化），可以按日回补
             raw_status = self._safe(lambda d=day: adapter.client.get_training_status(d))
             if raw_status:
-                row = self._training_status_row(raw_status, day)
+                # 身体年龄取专用端点：训练状态响应里的 mostRecentVO2Max.generic.fitnessAge
+                # 与 Garmin App 显示的值不一致（实测 20 vs 18），以 App 用的那个为准。
+                # 取不到就留空：入库是「非空才更新」，留空不会把已有值抹掉。
+                age = self._safe(lambda d=day: adapter.client.get_fitnessage_data(d))
+                row = self._training_status_row(raw_status, day, age)
                 if row is not None:
                     training.append(row)
 
@@ -285,6 +289,7 @@ class SyncWorker:
             "activities": list(activities.values()),
             "trainingStatus": training,
             "ftpHistory": self._ftp_rows(adapter),
+            "thresholdHr": self._threshold_hr_rows(adapter, start, end),
             "activityHrZones": hr_zones,
         }
 
@@ -321,6 +326,33 @@ class SyncWorker:
         return sorted(rows.values(), key=lambda r: r["effectiveDate"])
 
     @staticmethod
+    def _threshold_hr_rows(adapter: GarminReadAdapter, start: str, end: str) -> list[dict[str, Any]]:
+        """取阈值心率（乳酸阈值心率）历史。
+
+        返回体里有三块：``speed_and_heart_rate``（最新值）、``heart_rate``（变更历史）与
+        ``power``。**只取 heart_rate**：``power`` 那块是跑步阈值功率（实测 400 W，
+        sport=RUNNING、origin=weight），与骑行 FTP 完全是两回事，混进来会让处方强度翻倍。
+
+        Garmin 目前只提供跑步系列，骑行系列为空；系列必须带给平台，否则会被当成同一个值覆盖。
+        """
+
+        history = SyncWorker._safe(lambda: adapter.client.get_lactate_threshold(
+            latest=False, start_date=start, end_date=end))
+        rows: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in (history or {}).get("heart_rate") or []:
+            effective = (item.get("from") or "")[:10]
+            series = str(item.get("series") or "").strip().upper()
+            value = item.get("value")
+            if effective and series and value:
+                rows[(series, effective)] = {
+                    "effectiveDate": effective,
+                    "series": series,
+                    "heartRate": round(float(value)),
+                    "source": "GARMIN",
+                }
+        return sorted(rows.values(), key=lambda r: (r["series"], r["effectiveDate"]))
+
+    @staticmethod
     def _hr_zone_rows(zones: Any) -> list[dict[str, Any]]:
         """把活动心率区间转换为平台字段。"""
 
@@ -337,7 +369,8 @@ class SyncWorker:
         return sorted(rows, key=lambda r: r["zoneNumber"])
 
     @staticmethod
-    def _training_status_row(raw: dict[str, Any], day: str) -> dict[str, Any] | None:
+    def _training_status_row(raw: dict[str, Any], day: str,
+                             fitness_age: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """把训练状态响应转换为平台字段。
 
         响应按设备 ID 分组：训练状态取标了 primaryTrainingDevice 的那台，
@@ -383,7 +416,8 @@ class SyncWorker:
             "loadAnaerobicTargetMax": balance.get("monthlyLoadAnaerobicTargetMax"),
             "balanceFeedbackPhrase": balance.get("trainingBalanceFeedbackPhrase"),
             "vo2maxValue": vo2max.get("vo2MaxValue"),
-            "fitnessAge": vo2max.get("fitnessAge"),
+            # 身体年龄只认专用端点（Garmin App 的值）；取不到留空由入库侧保持原值
+            "fitnessAge": (fitness_age or {}).get("fitnessAge"),
         }
 
     @staticmethod

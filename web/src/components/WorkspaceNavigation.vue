@@ -44,7 +44,7 @@ const menuGroups: MenuGroup[] = [
   {
     label: "系统",
     items: [
-      { path: "/settings", label: "设置", icon: "settings" },
+      { path: "/profile", label: "个人中心", icon: "user" },
       {
         path: "/admin",
         label: "管理",

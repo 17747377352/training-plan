@@ -6,5 +6,5 @@ export type NavIconName =
   | "garmin"
   | "sync"
   | "export"
-  | "settings"
+  | "user"
   | "admin";

@@ -1957,6 +1957,48 @@ body {
   margin-bottom: 16px;
 }
 
+/* 个人中心的「身体数据」：每项都是最新值，因此统一带生效日期的小字说明。 */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.metric-item {
+  padding: 12px 14px;
+  border: 1px solid #eef1f5;
+  border-radius: 10px;
+  background: #fafbfc;
+}
+
+.metric-label {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: #8792a1;
+}
+
+.metric-value {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #223047;
+  line-height: 1.4;
+}
+
+.metric-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #9aa4b2;
+}
+
+.metric-empty {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.8;
+  color: #8792a1;
+}
+
 .goal-head {
   display: flex;
   align-items: flex-start;

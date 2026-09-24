@@ -154,10 +154,26 @@ public class BrowserUploadServiceImpl implements BrowserUploadService {
         });
         checkedRows(data.hrv()).forEach(row -> dates.add(row.calendarDate()));
         checkedRows(data.trainingStatus()).forEach(row -> dates.add(row.calendarDate()));
+        // FTP 与阈值心率是**账号级的最新值/变更历史**，不是本批区间内的逐日数据：
+        // Garmin 给的 FTP 是最近一次变更（可能是一年前），阈值心率只给最新一条
+        // （实测 178 bpm / 2026-08-29，早于常见的 3 天批次）。它们的去重键里带日期，
+        // 平台侧按日期覆盖，所以不能拿批次区间去卡它们 —— 否则改个 FTP 之后要等它
+        // 正好落在某次同步窗口里才传得上来。逐日数据仍然严格按区间校验。
         checkedRows(data.ftpHistory()).forEach(row -> {
-            dates.add(row.effectiveDate());
-            if (row.ftpWatts() == null || row.ftpWatts() <= 0) {
-                throw new BusinessException(ErrorCode.PARAM_ERROR, "FTP 必须为正数");
+            if (row.effectiveDate() == null || row.effectiveDate().isBlank()
+                    || row.ftpWatts() == null || row.ftpWatts() <= 0) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "FTP 必须为正数且带生效日期");
+            }
+        });
+        checkedRows(data.thresholdHr()).forEach(row -> {
+            if (row.effectiveDate() == null || row.effectiveDate().isBlank()) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "阈值心率缺少生效日期");
+            }
+            if (row.heartRate() == null || row.heartRate() <= 0) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "阈值心率必须为正数");
+            }
+            if (row.series() == null || row.series().isBlank()) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "阈值心率缺少系列");
             }
         });
         java.util.Set<Long> activityIds = new java.util.HashSet<>();

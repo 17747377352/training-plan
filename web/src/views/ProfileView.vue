@@ -6,9 +6,14 @@ import {
   getTrainingGoal,
   saveTrainingGoal,
 } from "../api/goals";
+import { getProfileOverview } from "../api/profile";
 import FeaturePanel from "../components/FeaturePanel.vue";
 import PageHeading from "../components/PageHeading.vue";
-import type { GoalType, TrainingGoalForm } from "../types/api";
+import type {
+  GoalType,
+  ProfileOverview,
+  TrainingGoalForm,
+} from "../types/api";
 
 const GOAL_TYPES: Array<{ value: GoalType; label: string; hint: string }> = [
   { value: "POWER", label: "提升功率", hint: "更看重阈值与高强度的产出" },
@@ -36,12 +41,137 @@ const currentType = computed(
   () => GOAL_TYPES.find((item) => item.value === form.goalType) ?? GOAL_TYPES[0],
 );
 
+const overview = ref<ProfileOverview | null>(null);
+const overviewLoading = ref(true);
+const overviewFailed = ref(false);
+
 /** 目标日期不允许早于今天；今天的 0 点用于和日期选择器比较。 */
 const todayStart = new Date();
 todayStart.setHours(0, 0, 0, 0);
 
 function disablePast(date: Date): boolean {
   return date.getTime() < todayStart.getTime();
+}
+
+function formatDay(value?: string | null): string {
+  if (!value) return "";
+  return value.slice(0, 10);
+}
+
+/** 秒 → 「7 小时 12 分」，用于睡眠时长。 */
+function formatDuration(seconds?: number | null): string {
+  if (!seconds || seconds <= 0) return "—";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.round((seconds % 3600) / 60);
+  return hours > 0 ? `${hours} 小时 ${minutes} 分` : `${minutes} 分`;
+}
+
+const SERIES_LABEL: Record<string, string> = { RUNNING: "跑步", CYCLING: "骑行" };
+
+/**
+ * 身体数据卡片。
+ *
+ * 这些指标都是「最新值 + 生效日期」（VO2max、FTP、阈值心率尤其如此），所以每一项都带
+ * 生效日期：只显示一个数字会让人误以为是今天的值。
+ */
+const metrics = computed(() => {
+  const data = overview.value;
+  if (!data) return [];
+  const training = data.training;
+  const daily = data.daily;
+  const sleep = data.sleep;
+  const ftp = data.ftp;
+
+  const threshold = data.thresholdHr.length
+    ? data.thresholdHr
+        .map((item) => `${item.heartRate} bpm（${SERIES_LABEL[item.series] ?? item.series}）`)
+        .join("，")
+    : "—";
+
+  return [
+    {
+      key: "ftp",
+      label: "骑行 FTP",
+      value: ftp?.watts ? `${ftp.watts} W` : "—",
+      hint: ftp
+        ? `生效 ${formatDay(ftp.effectiveDate)}${ftp.source === "DERIVED" ? " · 由 NP/IF 反解" : " · Garmin 接口"}`
+        : "本机浏览器路径拿不到该接口，会按活动功率反解",
+    },
+    {
+      key: "vo2max",
+      label: "最大摄氧量",
+      value: training?.vo2maxValue ? `${training.vo2maxValue}` : "—",
+      hint: training?.vo2maxDate
+        ? `更新 ${formatDay(training.vo2maxDate)}`
+        : "设备在符合条件的骑行后才更新",
+    },
+    {
+      key: "thresholdHr",
+      label: "阈值心率",
+      value: threshold,
+      hint: data.thresholdHr.length
+        ? `生效 ${formatDay(data.thresholdHr[0].effectiveDate)} · Garmin 目前只提供跑步系列`
+        : "Garmin 侧暂无阈值心率记录",
+    },
+    {
+      key: "fitnessAge",
+      label: "身体年龄",
+      value: training?.fitnessAge ? `${training.fitnessAge} 岁` : "—",
+      hint: training?.fitnessAgeDate ? `更新 ${formatDay(training.fitnessAgeDate)}` : "取自 Garmin 的身体年龄",
+    },
+    {
+      key: "stress",
+      label: "压力",
+      value: daily?.averageStressLevel != null ? `${daily.averageStressLevel}` : "—",
+      hint: daily?.calendarDate ? `日均值 · ${formatDay(daily.calendarDate)}` : "",
+    },
+    {
+      key: "battery",
+      label: "身体电量",
+      value:
+        daily?.bodyBatteryHighest != null || daily?.bodyBatteryLowest != null
+          ? `${daily?.bodyBatteryHighest ?? "—"} / ${daily?.bodyBatteryLowest ?? "—"}`
+          : "—",
+      hint: daily?.calendarDate ? `最高 / 最低 · ${formatDay(daily.calendarDate)}` : "",
+    },
+    {
+      key: "sleep",
+      label: "昨夜睡眠",
+      value: formatDuration(sleep?.totalSeconds),
+      hint: sleep
+        ? [
+            formatDay(sleep.calendarDate),
+            sleep.score != null ? `评分 ${sleep.score}` : "",
+            sleep.remSeconds ? `REM ${formatDuration(sleep.remSeconds)}` : "",
+          ]
+            .filter(Boolean)
+            .join(" · ") || "已入库的最近一次睡眠"
+        : "还没有睡眠记录",
+    },
+  ];
+});
+
+const hasAnyData = computed(() =>
+  Boolean(
+    overview.value &&
+      (overview.value.daily ||
+        overview.value.training ||
+        overview.value.ftp ||
+        overview.value.sleep ||
+        overview.value.thresholdHr.length),
+  ),
+);
+
+async function loadOverview(): Promise<void> {
+  overviewLoading.value = true;
+  overviewFailed.value = false;
+  try {
+    overview.value = await getProfileOverview();
+  } catch {
+    overviewFailed.value = true;
+  } finally {
+    overviewLoading.value = false;
+  }
 }
 
 async function loadGoal(): Promise<void> {
@@ -62,6 +192,10 @@ async function loadGoal(): Promise<void> {
   } finally {
     loading.value = false;
   }
+}
+
+async function refresh(): Promise<void> {
+  await Promise.all([loadOverview(), loadGoal()]);
 }
 
 async function submit(): Promise<void> {
@@ -106,20 +240,56 @@ async function remove(): Promise<void> {
   }
 }
 
-onMounted(loadGoal);
+onMounted(refresh);
 </script>
 
 <template>
   <section class="page-container">
     <PageHeading
-      eyebrow="个人偏好"
-      title="设置"
-      description="训练目标决定练什么；能不能练仍由恢复信号决定，目标不会放宽强度上限。"
+      eyebrow="个人中心"
+      title="个人中心"
+      description="这里汇总 Garmin 侧的身体数据与你的训练目标；能不能练仍由恢复信号决定，目标不会放宽强度上限。"
     >
       <template #actions>
-        <el-button :loading="loading" @click="loadGoal">刷新</el-button>
+        <el-button :loading="overviewLoading || loading" @click="refresh">刷新</el-button>
       </template>
     </PageHeading>
+
+    <el-alert
+      v-if="overviewFailed"
+      title="身体数据加载失败"
+      description="请确认后端服务正常，然后重试。"
+      type="error"
+      :closable="false"
+      show-icon
+      class="goal-load-error"
+    />
+
+    <el-card v-loading="overviewLoading" class="goal-card" shadow="never">
+      <div class="goal-head">
+        <div>
+          <p class="goal-title">身体数据</p>
+          <p class="goal-hint">
+            这些指标多数是 Garmin 的<strong>最新值</strong>（不是每天一个新值），所以每项都标了生效日期。
+            FTP 在只有本机浏览器上传时由活动功率按 Garmin 的 IF 定义反解，会注明「由 NP/IF 反解」。
+          </p>
+        </div>
+      </div>
+
+      <p v-if="!overviewLoading && !hasAnyData" class="metric-empty">
+        还没有 Garmin 数据。先到
+        <RouterLink class="advice-link" to="/garmin">Garmin 账号</RouterLink>
+        页面完成绑定，同步后这里会显示各项指标。
+      </p>
+
+      <div v-else class="metric-grid">
+        <div v-for="item in metrics" :key="item.key" class="metric-item">
+          <p class="metric-label">{{ item.label }}</p>
+          <p class="metric-value">{{ item.value }}</p>
+          <p v-if="item.hint" class="metric-hint">{{ item.hint }}</p>
+        </div>
+      </div>
+    </el-card>
 
     <el-alert
       v-if="loadFailed"

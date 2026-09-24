@@ -23,6 +23,7 @@ import com.trainingplan.platform.dto.sync.SyncJobDto;
 import com.trainingplan.platform.dto.sync.SyncJobQuery;
 import com.trainingplan.platform.dto.sync.SyncOverviewDto;
 import com.trainingplan.platform.dto.sync.SyncTaskPayload;
+import com.trainingplan.platform.dto.sync.ThresholdHrDto;
 import com.trainingplan.platform.dto.sync.TrainingStatusDto;
 import com.trainingplan.platform.entity.Activity;
 import com.trainingplan.platform.entity.ActivityHrZone;
@@ -30,6 +31,7 @@ import com.trainingplan.platform.entity.DailyHealth;
 import com.trainingplan.platform.entity.FtpHistory;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.entity.HrvRecord;
+import com.trainingplan.platform.entity.ThresholdHr;
 import com.trainingplan.platform.entity.NapRecord;
 import com.trainingplan.platform.entity.SleepRecord;
 import com.trainingplan.platform.entity.SyncJob;
@@ -38,6 +40,7 @@ import com.trainingplan.platform.mapper.ActivityHrZoneMapper;
 import com.trainingplan.platform.mapper.ActivityMapper;
 import com.trainingplan.platform.mapper.DailyHealthMapper;
 import com.trainingplan.platform.mapper.FtpHistoryMapper;
+import com.trainingplan.platform.mapper.ThresholdHrMapper;
 import com.trainingplan.platform.mapper.GarminAccountMapper;
 import com.trainingplan.platform.mapper.HrvRecordMapper;
 import com.trainingplan.platform.mapper.NapRecordMapper;
@@ -93,6 +96,8 @@ public class SyncServiceImpl implements SyncService {
     private static final String SOURCE_GARMIN = "GARMIN";
     /** FTP 允许的来源：Garmin 接口测得 / 由 NP/IF 反解 / 手工录入。 */
     private static final Set<String> FTP_SOURCES = Set.of(SOURCE_GARMIN, "DERIVED", "MANUAL");
+    /** 阈值心率只接受这两类系列：Garmin 目前只给跑步，骑行留作前向兼容。 */
+    private static final Set<String> THRESHOLD_HR_SERIES = Set.of("RUNNING", "CYCLING");
 
     /** 看板统计「最近 N 天失败数」的窗口。 */
     private static final int FAILURE_WINDOW_DAYS = 7;
@@ -109,6 +114,7 @@ public class SyncServiceImpl implements SyncService {
     private final NapRecordMapper napRecordMapper;
     private final TrainingStatusMapper trainingStatusMapper;
     private final FtpHistoryMapper ftpHistoryMapper;
+    private final ThresholdHrMapper thresholdHrMapper;
     private final ActivityHrZoneMapper activityHrZoneMapper;
     private final TokenCipher tokenCipher;
     private final StringRedisTemplate redisTemplate;
@@ -276,11 +282,12 @@ public class SyncServiceImpl implements SyncService {
         int activities = upsertActivities(accountId, request.activities());
         int training = upsertTrainingStatus(accountId, request.trainingStatus());
         int ftp = upsertFtpHistory(accountId, request.ftpHistory());
+        int thresholdHr = upsertThresholdHr(accountId, request.thresholdHr());
         // 心率区间会先删后插，放在同一事务里，避免中途失败留下半份数据
         int zones = upsertActivityHrZones(accountId, request.activityHrZones());
         log.info("同步数据已入库 jobId={} daily={} sleep={} hrv={} nap={} activity={} "
-                        + "training={} ftp={} hrZone={}",
-                jobId, daily, sleep, hrv, naps, activities, training, ftp, zones);
+                        + "training={} ftp={} hrZone={} thresholdHr={}",
+                jobId, daily, sleep, hrv, naps, activities, training, ftp, zones, thresholdHr);
     }
 
     @Override
@@ -908,6 +915,46 @@ public class SyncServiceImpl implements SyncService {
                 ftpHistoryMapper.insert(entity);
             } else {
                 ftpHistoryMapper.updateById(entity);
+            }
+            affected++;
+        }
+        return affected;
+    }
+
+    /**
+     * 覆盖写入阈值心率，按 (账号, 系列, 生效日期) 去重。
+     *
+     * <p>Garmin 给的是稀疏的变更历史而不是逐日数据，所以不能按日期当逐日指标处理；
+     * 系列必须参与去重，否则跑步 178 与骑行空值会互相覆盖。</p>
+     */
+    private int upsertThresholdHr(Long accountId, List<ThresholdHrDto> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return 0;
+        }
+        int affected = 0;
+        for (ThresholdHrDto dto : rows) {
+            LocalDate date = parseDate(dto.effectiveDate());
+            String series = dto.series() == null ? "" : dto.series().trim().toUpperCase(Locale.ROOT);
+            if (date == null || dto.heartRate() == null || dto.heartRate() <= 0
+                    || !THRESHOLD_HR_SERIES.contains(series)) {
+                log.warn("跳过无效的阈值心率上报：date={} series={} heartRate={}",
+                        dto.effectiveDate(), dto.series(), dto.heartRate());
+                continue;
+            }
+            ThresholdHr existing = thresholdHrMapper.selectOne(Wrappers.<ThresholdHr>lambdaQuery()
+                    .eq(ThresholdHr::getGarminAccountId, accountId)
+                    .eq(ThresholdHr::getSeries, series)
+                    .eq(ThresholdHr::getEffectiveDate, date));
+            ThresholdHr entity = existing == null ? new ThresholdHr() : existing;
+            entity.setGarminAccountId(accountId);
+            entity.setEffectiveDate(date);
+            entity.setSeries(series);
+            entity.setHeartRate(dto.heartRate());
+            entity.setSource(resolveFtpSource(dto.source()));
+            if (existing == null) {
+                thresholdHrMapper.insert(entity);
+            } else {
+                thresholdHrMapper.updateById(entity);
             }
             affected++;
         }

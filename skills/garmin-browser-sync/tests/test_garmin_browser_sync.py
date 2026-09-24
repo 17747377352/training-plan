@@ -250,6 +250,51 @@ class MappingTest(unittest.TestCase):
 
             self.assertEqual([], build_payload(db, "2026-09-20", "2026-09-20")["data"]["ftpHistory"])
 
+    def test_threshold_hr_takes_latest_row_and_keeps_series(self):
+        """阈值心率上游只存最新一条，且骑行系列为空 —— 日期会早于本批起点。
+
+        平台侧因此不按批次区间校验这类历史（见 BrowserUploadServiceImpl）：这里只保证
+        取到「≤ end 的最近一条」、按系列展开、日期原样带上。
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "garmin.db"
+            conn = sqlite3.connect(db)
+            conn.executescript("""
+                CREATE TABLE daily_summary(calendar_date TEXT, total_steps INTEGER);
+                CREATE TABLE lactate_threshold(calendar_date TEXT, speed REAL, heart_rate INTEGER,
+                    heart_rate_cycling INTEGER);
+            """)
+            conn.execute("INSERT INTO daily_summary VALUES (?,?)", ("2026-09-20", 1000))
+            conn.execute("INSERT INTO lactate_threshold VALUES (?,?,?,?)",
+                         ("2026-08-22T10:00:00.0", None, 179, None))
+            conn.execute("INSERT INTO lactate_threshold VALUES (?,?,?,?)",
+                         ("2026-08-29T17:25:45.985", None, 178, None))
+            conn.commit()
+            conn.close()
+
+            rows = build_payload(db, "2026-09-20", "2026-09-20")["data"]["thresholdHr"]
+
+            # 取最近一条（178），日期保留它自己的生效日；骑行系列为空就不编造
+            self.assertEqual([{"effectiveDate": "2026-08-29", "series": "RUNNING",
+                               "heartRate": 178, "source": "GARMIN"}], rows)
+
+    def test_threshold_hr_survives_missing_table_or_empty_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "garmin.db"
+            conn = sqlite3.connect(db)
+            conn.executescript("""
+                CREATE TABLE daily_summary(calendar_date TEXT, total_steps INTEGER);
+                CREATE TABLE lactate_threshold(calendar_date TEXT, speed REAL, heart_rate INTEGER,
+                    heart_rate_cycling INTEGER);
+            """)
+            conn.execute("INSERT INTO daily_summary VALUES (?,?)", ("2026-09-20", 1000))
+            conn.execute("INSERT INTO lactate_threshold VALUES (?,?,?,?)",
+                         ("2026-08-29T17:25:45.985", None, None, None))
+            conn.commit()
+            conn.close()
+
+            self.assertEqual([], build_payload(db, "2026-09-20", "2026-09-20")["data"]["thresholdHr"])
+
     def test_naps_come_from_daily_nap_dtos_array(self):
         """午睡是 dailySleepDTO 里的数组，且只在有午睡时才出现。
 

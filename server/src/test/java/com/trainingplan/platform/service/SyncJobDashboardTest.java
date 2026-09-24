@@ -85,6 +85,8 @@ class SyncJobDashboardTest {
     @Mock
     private FtpHistoryMapper ftpHistoryMapper;
     @Mock
+    private com.trainingplan.platform.mapper.ThresholdHrMapper thresholdHrMapper;
+    @Mock
     private ActivityHrZoneMapper activityHrZoneMapper;
     @Mock
     private TokenCipher tokenCipher;
@@ -105,7 +107,7 @@ class SyncJobDashboardTest {
         TableInfoHelper.initTableInfo(assistant, GarminAccount.class);
         syncService = new SyncServiceImpl(syncJobMapper, accountMapper, activityMapper,
                 dailyHealthMapper, sleepRecordMapper, hrvRecordMapper, napRecordMapper, trainingStatusMapper,
-                ftpHistoryMapper, activityHrZoneMapper, tokenCipher, redisTemplate,
+                ftpHistoryMapper, thresholdHrMapper, activityHrZoneMapper, tokenCipher, redisTemplate,
                 new ObjectMapper(), userService);
         ReflectionTestUtils.setField(syncService, "taskQueue", "training-plan:sync:jobs");
         ReflectionTestUtils.setField(syncService, "pendingTimeout", java.time.Duration.ofMinutes(10));

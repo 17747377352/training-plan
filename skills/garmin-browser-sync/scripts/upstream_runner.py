@@ -14,6 +14,8 @@ ALLOWED = {
     "activities", "activities_range", "activity_hr_zones",
     # 训练状态映射依赖这两张旁表；网络请求与落盘必须同时放行，才能刷新每日数据。
     "vo2max_trend", "vo2max_running", "vo2max_cycling", "fitness_age",
+    # 阈值心率（乳酸阈值）：上游只给「最新一条」，不像 FTP 有区间历史。
+    "lactate_threshold",
 }
 PRIVATE_KEYS = {
     "activityname", "firstname", "lastname", "fullname", "displayname", "username", "email",

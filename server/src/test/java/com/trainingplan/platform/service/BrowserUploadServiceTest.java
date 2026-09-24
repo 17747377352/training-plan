@@ -6,6 +6,8 @@ import com.trainingplan.platform.dto.garmin.BrowserUploadPairRequest;
 import com.trainingplan.platform.dto.garmin.BrowserUploadPairResult;
 import com.trainingplan.platform.dto.garmin.BrowserUploadRequest;
 import com.trainingplan.platform.dto.sync.DailyHealthDto;
+import com.trainingplan.platform.dto.sync.ThresholdHrDto;
+import com.trainingplan.platform.dto.sync.FtpHistoryDto;
 import com.trainingplan.platform.dto.sync.SyncIngestRequest;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.entity.SyncJob;
@@ -181,6 +183,48 @@ class BrowserUploadServiceTest {
         account.setAuthStatus("ACTIVE");
         account.setSyncEnabled(1);
         return account;
+    }
+
+    @Test
+    void historyTypesMayCarryDatesOutsideTheBatchWindow() {
+        // FTP 与阈值心率是账号级的最新值/变更历史：Garmin 给的 FTP 可能是去年的，
+        // 阈值心率只有最新一条（实测 178 bpm / 2026-08-29）。若拿批次区间去卡它们，
+        // 改个 FTP 之后要等它正好落进某次同步窗口才传得上来。
+        when(credentials.selectAccountIdByTokenHashForUpdate(anyString())).thenReturn(11L);
+        when(accounts.selectById(11L)).thenReturn(account());
+        when(jobs.insert(any(SyncJob.class))).thenAnswer(invocation -> {
+            SyncJob job = invocation.getArgument(0);
+            job.setId(88L);
+            return 1;
+        });
+        DailyHealthDto daily = new DailyHealthDto("2026-09-23", 8000, null, null, null,
+                null, null, null, null, null, null);
+        SyncIngestRequest data = new SyncIngestRequest(List.of(daily), List.of(), List.of(),
+                List.of(), List.of(), List.of(),
+                List.of(new FtpHistoryDto("2025-09-27", 233, null)),
+                java.util.Map.of(),
+                List.of(new ThresholdHrDto("2026-08-29", "RUNNING", 178, null)));
+        BrowserUploadRequest upload = new BrowserUploadRequest(
+                LocalDate.of(2026, 9, 21), LocalDate.of(2026, 9, 23), data);
+
+        assertEquals(88L, service.ingest("a".repeat(40), upload));
+    }
+
+    @Test
+    void dailyTypesStillMustStayInsideTheBatchWindow() {
+        // 逐日数据仍然严格按区间校验：这是一道防「把旧数据当成本批新鲜数据」的闸门
+        when(credentials.selectAccountIdByTokenHashForUpdate(anyString())).thenReturn(11L);
+        when(accounts.selectById(11L)).thenReturn(account());
+        DailyHealthDto outside = new DailyHealthDto("2026-08-01", 8000, null, null, null,
+                null, null, null, null, null, null);
+        SyncIngestRequest data = new SyncIngestRequest(List.of(outside), List.of(), List.of(),
+                List.of(), List.of(), List.of(), List.of(), java.util.Map.of());
+        BrowserUploadRequest upload = new BrowserUploadRequest(
+                LocalDate.of(2026, 9, 21), LocalDate.of(2026, 9, 23), data);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.ingest("a".repeat(40), upload));
+        assertEquals(ErrorCode.PARAM_ERROR, error.getErrorCode());
     }
 
     private static BrowserUploadRequest request(String date) {

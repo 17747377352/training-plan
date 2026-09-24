@@ -453,7 +453,12 @@ def test_training_status_row_maps_load_and_balance():
     assert row["loadAerobicHigh"] == 2161.64
     assert row["balanceFeedbackPhrase"] == "AEROBIC_LOW_SHORTAGE"
     assert row["vo2maxValue"] == 59.0
-    assert row["fitnessAge"] == 20
+    # 身体年龄只认专用端点（Garmin App 的值）：训练状态响应里那个 20 不能用，
+    # 没给专用值就留空，让入库侧保持原值而不是写入一个与 App 不一致的数。
+    assert row["fitnessAge"] is None
+    with_age = build_worker()._training_status_row(
+        _training_status_payload(), "2026-09-21", {"fitnessAge": 18.0})
+    assert with_age["fitnessAge"] == 18.0, "专用端点的值必须覆盖训练状态里的 20"
 
 
 def test_training_status_row_prefers_primary_device():
@@ -591,6 +596,18 @@ def test_collect_uses_hrv_range_endpoint_and_returns_all_payload_keys():
         def get_cycling_ftp(self):
             return {}
 
+        def get_fitnessage_data(self, day):
+            calls.append(("fitnessage", day))
+            return {"fitnessAge": 18.0, "chronologicalAge": 26}
+
+        def get_lactate_threshold(self, latest=True, start_date=None, end_date=None, **kwargs):
+            calls.append(("lactate_threshold", str(start_date), str(end_date)))
+            # power 那块是跑步阈值功率，不是骑行 FTP：必须被忽略
+            return {
+                "heart_rate": [{"from": "2026-08-29", "series": "running", "value": 178.0}],
+                "power": [{"from": "2026-08-29", "series": "running", "value": 400, "sport": "RUNNING"}],
+            }
+
     class _Adapter:
         client = _Client()
 
@@ -607,10 +624,14 @@ def test_collect_uses_hrv_range_endpoint_and_returns_all_payload_keys():
     assert len([c for c in calls if c[0] == "training_status"]) == 3
     assert [r["calendarDate"] for r in result["hrv"]] == ["2026-09-19", "2026-09-20"]
     assert result["ftpHistory"] == [{"effectiveDate": "2026-08-29", "ftpWatts": 213}]
+    # 阈值心率只取 heart_rate 那块；power（跑步阈值功率 400W）混进来会让处方强度翻倍
+    assert result["thresholdHr"] == [{"effectiveDate": "2026-08-29", "series": "RUNNING",
+                                     "heartRate": 178, "source": "GARMIN"}]
+    assert len([c for c in calls if c[0] == "lactate_threshold"]) == 1
     # 载荷键名与平台 SyncIngestRequest 的字段一一对应
     assert set(result) == {
         "dailyHealth", "sleep", "naps", "hrv", "activities",
-        "trainingStatus", "ftpHistory", "activityHrZones",
+        "trainingStatus", "ftpHistory", "thresholdHr", "activityHrZones",
     }
 
 

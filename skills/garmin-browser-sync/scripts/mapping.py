@@ -105,6 +105,33 @@ def derived_ftp_history(candidates):
             for day, (_, watts) in sorted(best.items())]
 
 
+def threshold_hr_rows(conn, end):
+    """取阈值心率（乳酸阈值心率）：上游只存最新一条，按系列展开成平台字段。
+
+    上游那个接口返回的是**最新值**而不是历史（实测一条：178 bpm，日期 2026-08-29），
+    而且骑行系列为空 —— Garmin 只给跑步的阈值心率。所以这里按「≤ end 的最近一条」取值，
+    日期可能早于本批起点：它是账号级的最新值，不是本批区间内的逐日数据，
+    平台侧也因此不按批次区间校验这两类历史（见 BrowserUploadServiceImpl）。
+    """
+
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lactate_threshold'").fetchone():
+        return []
+    row = conn.execute(
+        'SELECT * FROM "lactate_threshold" WHERE substr("calendar_date",1,10) <= ? '
+        'ORDER BY "calendar_date" DESC LIMIT 1', (end,)).fetchone()
+    if row is None:
+        return []
+    record = dict(row)
+    day = str(record["calendar_date"])[:10]
+    rows = []
+    for series, column in (("RUNNING", "heart_rate"), ("CYCLING", "heart_rate_cycling")):
+        value = record.get(column)
+        if value:
+            rows.append({"effectiveDate": day, "series": series,
+                         "heartRate": round(float(value)), "source": "GARMIN"})
+    return rows
+
+
 def build_payload(db_path, start, end):
     """读取指定日期范围；缺失每日数据时拒绝上报，避免把旧数据当作完整同步。"""
     start_day, end_day = date.fromisoformat(start), date.fromisoformat(end)
@@ -226,6 +253,7 @@ def build_payload(db_path, start, end):
                     {"zoneNumber": z["zoneNumber"], "zoneLowBoundary": z.get("zoneLowBoundary"),
                      "secondsInZone": round(z.get("secsInZone") or 0)} for z in zones if z.get("zoneNumber")]
         data["ftpHistory"] = derived_ftp_history(ftp_candidates)
+        data["thresholdHr"] = threshold_hr_rows(conn, end)
         return {"startDate": start, "endDate": end, "data": data}
     finally:
         conn.close()

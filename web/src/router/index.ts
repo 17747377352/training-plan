@@ -60,10 +60,10 @@ const router = createRouter({
           meta: { title: "数据导出" },
         },
         {
-          path: "settings",
-          name: "settings",
-          component: () => import("../views/SettingsView.vue"),
-          meta: { title: "设置" },
+          path: "profile",
+          name: "profile",
+          component: () => import("../views/ProfileView.vue"),
+          meta: { title: "个人中心" },
         },
         {
           path: "admin",

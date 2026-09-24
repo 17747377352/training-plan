@@ -58,13 +58,9 @@ defineProps<{ name: NavIconName }>();
       <path d="m8.2 10.8 3.8 3.8 3.8-3.8" />
       <path d="M5 16v3.5h14V16" />
     </template>
-    <template v-else-if="name === 'settings'">
-      <path d="M4 7h7" />
-      <path d="M15 7h5" />
-      <circle cx="13" cy="7" r="2" />
-      <path d="M4 17h4" />
-      <path d="M12 17h8" />
-      <circle cx="10" cy="17" r="2" />
+    <template v-else-if="name === 'user'">
+      <circle cx="12" cy="8.2" r="3.3" />
+      <path d="M5.4 19.6c0-3.4 2.9-5.6 6.6-5.6s6.6 2.2 6.6 5.6" />
     </template>
     <template v-else>
       <path

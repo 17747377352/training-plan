@@ -9,6 +9,7 @@ import com.trainingplan.platform.common.exception.BusinessException;
 import com.trainingplan.platform.dto.sync.ActivityHrZoneDto;
 import com.trainingplan.platform.dto.sync.DailyHealthDto;
 import com.trainingplan.platform.dto.sync.FtpHistoryDto;
+import com.trainingplan.platform.dto.sync.ThresholdHrDto;
 import com.trainingplan.platform.dto.sync.HrvRecordDto;
 import com.trainingplan.platform.dto.sync.NapRecordDto;
 import com.trainingplan.platform.dto.sync.TrainingStatusDto;
@@ -20,6 +21,7 @@ import com.trainingplan.platform.entity.Activity;
 import com.trainingplan.platform.entity.DailyHealth;
 import com.trainingplan.platform.entity.GarminAccount;
 import com.trainingplan.platform.entity.FtpHistory;
+import com.trainingplan.platform.entity.ThresholdHr;
 import com.trainingplan.platform.entity.HrvRecord;
 import com.trainingplan.platform.entity.NapRecord;
 import com.trainingplan.platform.entity.TrainingStatus;
@@ -89,6 +91,8 @@ class SyncServiceTest {
     @Mock
     private FtpHistoryMapper ftpHistoryMapper;
     @Mock
+    private com.trainingplan.platform.mapper.ThresholdHrMapper thresholdHrMapper;
+    @Mock
     private ActivityHrZoneMapper activityHrZoneMapper;
     @Mock
     private TokenCipher tokenCipher;
@@ -113,7 +117,7 @@ class SyncServiceTest {
         }
         syncService = new SyncServiceImpl(syncJobMapper, accountMapper, activityMapper,
                 dailyHealthMapper, sleepRecordMapper, hrvRecordMapper, napRecordMapper, trainingStatusMapper,
-                ftpHistoryMapper, activityHrZoneMapper, tokenCipher, redisTemplate,
+                ftpHistoryMapper, thresholdHrMapper, activityHrZoneMapper, tokenCipher, redisTemplate,
                 new ObjectMapper(), userService);
         ReflectionTestUtils.setField(syncService, "taskQueue", "training-plan:sync:jobs");
     }
@@ -605,6 +609,43 @@ class SyncServiceTest {
 
         verify(ftpHistoryMapper, never()).insert(any(FtpHistory.class));
         verify(ftpHistoryMapper, never()).updateById(any(FtpHistory.class));
+    }
+
+    @Test
+    void shouldUpsertThresholdHrBySeriesAndDate() {
+        // 系列必须参与去重：Garmin 只给跑步，但骑行将来可能出现，两者不能互相覆盖
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+        when(thresholdHrMapper.selectOne(any(Wrapper.class))).thenReturn(new ThresholdHr());
+
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(), java.util.Map.of(),
+                List.of(new ThresholdHrDto("2026-08-29", "running", 178, null))));
+
+        ArgumentCaptor<ThresholdHr> captor = ArgumentCaptor.forClass(ThresholdHr.class);
+        verify(thresholdHrMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getSeries()).isEqualTo("RUNNING");
+        assertThat(captor.getValue().getHeartRate()).isEqualTo(178);
+        assertThat(captor.getValue().getEffectiveDate()).isEqualTo(LocalDate.of(2026, 8, 29));
+        // 来源缺省按 GARMIN，新类型也要沿用这个约定
+        assertThat(captor.getValue().getSource()).isEqualTo("GARMIN");
+        verify(thresholdHrMapper, never()).insert(any(ThresholdHr.class));
+    }
+
+    @Test
+    void shouldSkipInvalidThresholdHrRowsIndividually() {
+        // 心率非正、系列缺失/非法、日期不可解析都要逐条跳过：Garmin 少给一个系列
+        // 不应该把整次同步打断
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(), java.util.Map.of(),
+                List.of(new ThresholdHrDto("2026-08-29", "RUNNING", 0, null),
+                        new ThresholdHrDto("2026-08-29", null, 178, null),
+                        new ThresholdHrDto("2026-08-29", "SWIMMING", 178, null),
+                        new ThresholdHrDto("not-a-date", "RUNNING", 178, null))));
+
+        verify(thresholdHrMapper, never()).insert(any(ThresholdHr.class));
+        verify(thresholdHrMapper, never()).updateById(any(ThresholdHr.class));
     }
 
     @Test
