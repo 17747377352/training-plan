@@ -13,12 +13,63 @@ import unittest
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import garmin_sync as runner
+import upstream_runner
 from mapping import build_payload, iso_gmt
 from upstream_runner import allowed, scrub
+
+
+class UpstreamCollectionTest(unittest.TestCase):
+    def test_capacity_endpoints_reach_fetch_and_save_without_private_data(self):
+        """走真实包装入口，防止映射能读旧表、日常采集却被白名单拦掉。"""
+        fetched, saved = [], {}
+        cli = ModuleType("garmin_givemydata")
+        client_module = ModuleType("garmin_client")
+
+        class Client:
+            def _fetch_batch(self, rest, gql):
+                names = list(rest) + ["gql_" + name for name in gql]
+                fetched.extend(names)
+                return {name: {"status": 200, "data": {"value": 59, "email": "private@example.com"}}
+                        for name in names}
+
+        def save(conn, name, data, cal_date=None):
+            saved[name] = data
+            return 1
+
+        def collect():
+            result = Client()._fetch_batch(
+                {"vo2max_trend": "/trend", "fitness_age_2026-09-24": "/age",
+                 "user_profile": "/profile", "activity_trackpoints": "/gps"},
+                {"vo2max_running": "running", "vo2max_cycling": "cycling"},
+            )
+            for name, response in result.items():
+                cli.save_to_db(None, name.removesuffix("_2026-09-24"), response["data"],
+                               cal_date="2026-09-24")
+            # 落盘入口也要单独守住，不能只依赖网络层已过滤。
+            cli.save_to_db(None, "user_profile", {"email": "private@example.com"})
+
+        cli.main, cli.save_to_db = collect, save
+        client_module.GarminClient = Client
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = Path(directory) / "manifest.json"
+            with patch.dict(sys.modules, {"garmin_givemydata": cli, "garmin_client": client_module}), \
+                    patch.dict(os.environ, {"GARMIN_RUN_MANIFEST": str(manifest_path)}), \
+                    patch.object(upstream_runner.os, "umask"), \
+                    patch.object(upstream_runner.logging, "disable"):
+                self.assertEqual(0, upstream_runner.main())
+            manifest = json.loads(manifest_path.read_text())
+
+        expected = {"vo2max_trend", "fitness_age_2026-09-24",
+                    "gql_vo2max_running", "gql_vo2max_cycling"}
+        self.assertEqual(expected, set(fetched))
+        self.assertEqual(expected, set(manifest["endpoints"]))
+        self.assertTrue(manifest["success"])
+        self.assertEqual({name.removesuffix("_2026-09-24"): {"value": 59} for name in expected}, saved)
 
 
 class MappingTest(unittest.TestCase):

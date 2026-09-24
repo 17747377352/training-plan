@@ -12,6 +12,8 @@ ALLOWED = {
     "daily_summary", "daily_summaries", "sleep", "sleep_detail", "sleep_summaries", "sleep_stats",
     "hrv", "hrv_daily", "training_status_daily", "training_status_weekly", "training_status",
     "activities", "activities_range", "activity_hr_zones",
+    # 训练状态映射依赖这两张旁表；网络请求与落盘必须同时放行，才能刷新每日数据。
+    "vo2max_trend", "vo2max_running", "vo2max_cycling", "fitness_age",
 }
 PRIVATE_KEYS = {
     "activityname", "firstname", "lastname", "fullname", "displayname", "username", "email",
