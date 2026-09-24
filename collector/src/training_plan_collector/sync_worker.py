@@ -326,7 +326,8 @@ class SyncWorker:
         return sorted(rows.values(), key=lambda r: r["effectiveDate"])
 
     @staticmethod
-    def _threshold_hr_rows(adapter: GarminReadAdapter, start: str, end: str) -> list[dict[str, Any]]:
+    def _threshold_hr_rows(adapter: GarminReadAdapter, start: str,
+                           end: str) -> list[dict[str, Any]]:
         """取阈值心率（乳酸阈值心率）历史。
 
         返回体里有三块：``speed_and_heart_rate``（最新值）、``heart_rate``（变更历史）与

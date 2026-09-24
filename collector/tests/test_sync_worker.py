@@ -605,7 +605,8 @@ def test_collect_uses_hrv_range_endpoint_and_returns_all_payload_keys():
             # power 那块是跑步阈值功率，不是骑行 FTP：必须被忽略
             return {
                 "heart_rate": [{"from": "2026-08-29", "series": "running", "value": 178.0}],
-                "power": [{"from": "2026-08-29", "series": "running", "value": 400, "sport": "RUNNING"}],
+                "power": [{"from": "2026-08-29", "series": "running", "value": 400,
+                           "sport": "RUNNING"}],
             }
 
     class _Adapter:
