@@ -66,6 +66,11 @@ const router = createRouter({
           meta: { title: "个人中心" },
         },
         {
+          // 页面由「设置」改名而来：旧链接直接跳过去，不要落到空白页（没有 404 兜底路由）
+          path: "settings",
+          redirect: "/profile",
+        },
+        {
           path: "admin",
           name: "admin",
           component: () => import("../views/AdminView.vue"),
