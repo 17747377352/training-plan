@@ -49,7 +49,16 @@ python3 garmin_sync.py upload --db <其它 garmin.db> --dry-run   # 只看会传
 # 5. 改 Garmin 密码 / 体检（体检不显示凭据）
 GARMIN_PASSWORD=<新密码> python3 garmin_sync.py credentials
 python3 garmin_sync.py doctor
+
+# 6. 每日定时（macOS launchd）：默认每天 10:30 跑一次 sync
+python3 garmin_sync.py schedule --print            # 先看生成的 plist，不写系统
+python3 garmin_sync.py schedule --hour 7 --minute 20
+python3 garmin_sync.py schedule --uninstall        # 卸载
 ```
+
+无人值守要求先配好 Garmin 密码（`doctor` 的 `garminCredentialReady` 必须为 true）；
+只有 `upload` 补传不需要密码。多套配置（例如测试环境与线上各一份）用 `--state-dir`
+配 `--label` 各装一个任务。
 
 `--state-dir` 可指定状态目录（默认在 skill 自己的 `storage/`）。所有命令输出单行 JSON，便于 agent
 读取与汇报；失败时为 `{"ok": false, "error": ...}` 并以退出码 1 结束。
@@ -73,6 +82,9 @@ python3 garmin_sync.py doctor
 - **单进程独占**：`storage/sync.lock` 文件锁保证同一状态目录同时只有一个进程使用浏览器会话。
 - **取数有上限**：浏览器取数超过 30 分钟会被终止并提示改用 `--visible`，不会无限挂住。
 - **平台按唯一键去重**：重复上传是覆盖更新，不会产生重复数据。
+- **定时任务自愈**：plist 里解释器走 `/usr/bin/env python3` 而不是写死绝对路径 —— Homebrew
+  升级后 Cellar 里的版本目录会消失，写死会让任务在无人察觉的情况下再也跑不起来。日志写在
+  `<state-dir>/logs/schedule.log`；`RunAtLoad` 为 false，改时间不会意外触发一次真实取数。
 
 ## 已知缺口（不要当成采集失败去修）
 
@@ -123,4 +135,5 @@ python3 -m unittest discover -s tests
 
 测试覆盖：真实睡眠形状与隐私字段剔除、UTC 时间换算（不受本机时区影响）、ACWR 两层嵌套
 （`latestTrainingStatusData[设备ID]`）、VO2max 按运动类型取骑行（且与入库顺序无关）、午睡数组、
-心率区间转置、设备 ID、HTTP 200 + 业务失败不算成功、断点补传、坏回执不推进检查点、并发运行被拒。
+心率区间转置、设备 ID、定时 plist（不写死解释器路径、时间校验、能被 launchd 解析）、
+HTTP 200 + 业务失败不算成功、断点补传、坏回执不推进检查点、并发运行被拒。

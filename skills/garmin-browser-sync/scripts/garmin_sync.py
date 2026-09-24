@@ -6,6 +6,7 @@ import contextlib
 import getpass
 import json
 import os
+import plistlib
 import shutil
 import signal
 import subprocess
@@ -23,6 +24,7 @@ from mapping import build_payload, counts
 SKILL_DIR = Path(__file__).resolve().parents[1]
 UPSTREAM = "garmin-givemydata==0.1.13"
 DEFAULT_SERVER = "https://songtop.xyz/planapi"
+DEFAULT_SCHEDULE_LABEL = "com.training-plan.garmin-browser-sync"
 
 
 class SyncError(Exception):
@@ -259,6 +261,77 @@ def capture(state_dir, config, start, visible):
     return manifest
 
 
+def schedule_plist(python, skill_dir, state_dir, hour, minute, label):
+    """生成 launchd 任务定义。纯函数：不碰文件系统，便于离线校验。"""
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise SyncError("定时时间无效：小时 0-23、分钟 0-59")
+    log_file = Path(state_dir) / "logs" / "schedule.log"
+    # 解释器走 env + PATH 而不是写死绝对路径：Homebrew 升级后 Cellar 里的 <版本> 目录会消失，
+    # 写死会让定时任务在无人察觉的情况下再也跑不起来。PATH 里保留解释器所在目录（升级后失效
+    # 会被跳过），再兜底到 /opt/homebrew/bin 与 uv 的位置（prepare 需要 uv）。
+    search_path = ":".join([str(Path(python).parent), "/opt/homebrew/bin", "/usr/local/bin",
+                            str(Path.home() / ".local" / "bin"), "/usr/bin", "/bin"])
+    return {
+        "Label": label,
+        "ProgramArguments": ["/usr/bin/env", "python3",
+                             str(Path(skill_dir) / "scripts" / "garmin_sync.py"),
+                             "--state-dir", str(state_dir), "sync"],
+        "StartCalendarInterval": {"Hour": hour, "Minute": minute},
+        # 装载时不立刻跑：否则每次改配置都会意外触发一次真实取数
+        "RunAtLoad": False,
+        "WorkingDirectory": str(state_dir),
+        "StandardOutPath": str(log_file),
+        "StandardErrorPath": str(log_file),
+        "EnvironmentVariables": {"PATH": search_path, "HOME": str(Path.home())},
+    }
+
+
+def plist_path(label):
+    return Path.home() / "Library" / "LaunchAgents" / (label + ".plist")
+
+
+def launchctl(action, label, path=None):
+    """调用 launchctl；返回 (是否成功, 输出)。"""
+    if action == "bootstrap":
+        command = ["launchctl", "bootstrap", f"gui/{os.getuid()}", str(path)]
+    elif action == "bootout":
+        command = ["launchctl", "bootout", f"gui/{os.getuid()}/{label}"]
+    else:
+        command = ["launchctl", "print", f"gui/{os.getuid()}/{label}"]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+    return result.returncode == 0, (result.stdout or result.stderr).strip()
+
+
+def schedule(args, state_dir):
+    label = args.label or DEFAULT_SCHEDULE_LABEL
+    target = plist_path(label)
+    if args.uninstall:
+        launchctl("bootout", label)
+        target.unlink(missing_ok=True)
+        emit({"ok": True, "action": "schedule-uninstall", "label": label})
+        return
+    spec = schedule_plist(sys.executable, SKILL_DIR, state_dir,
+                          args.hour, args.minute, label)
+    encoded = plistlib.dumps(spec)
+    if args.print_only:
+        sys.stdout.write(encoded.decode())
+        return
+    if sys.platform != "darwin":
+        raise SyncError("定时任务目前只支持 macOS launchd")
+    (state_dir / "logs").mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        launchctl("bootout", label)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(encoded)
+    ok, output = launchctl("bootstrap", label, target)
+    if not ok:
+        raise SyncError("定时任务装载失败：" + output)
+    loaded, status = launchctl("print", label)
+    emit({"ok": loaded, "action": "schedule-install", "label": label, "plist": str(target),
+          "hour": args.hour, "minute": args.minute, "stateDir": str(state_dir),
+          "logFile": spec["StandardOutPath"], "loaded": loaded, "status": status.splitlines()[0] if status else ""})
+
+
 def sync(args, state_dir):
     config = configured(state_dir)
     progress = read_json(state_dir / "progress.json")
@@ -314,6 +387,12 @@ def main(argv=None):
     run = commands.add_parser("sync", help="补传后取最近三天及缺口数据，再上传")
     run.add_argument("--since")
     run.add_argument("--visible", action="store_true", help="显示 Chrome 供人工完成验证")
+    cron = commands.add_parser("schedule", help="生成/装载每日定时任务（macOS launchd）")
+    cron.add_argument("--hour", type=int, default=10, help="每天几点运行，默认 10")
+    cron.add_argument("--minute", type=int, default=30, help="第几分钟运行，默认 30")
+    cron.add_argument("--label", help="launchd 标签，多套配置可各用一个")
+    cron.add_argument("--print", dest="print_only", action="store_true", help="只打印 plist，不写入系统")
+    cron.add_argument("--uninstall", action="store_true", help="卸载定时任务")
     args = parser.parse_args(argv)
     state_dir = args.state_dir.expanduser().resolve()
     try:
@@ -335,6 +414,8 @@ def main(argv=None):
                       "runtimeReady": python_path(state_dir).exists(), "paired": bool(config.get("uploadToken")),
                       "garminCredentialReady": bool(config.get("garminPassword") or os.environ.get("GARMIN_PASSWORD")),
                       "stateDir": str(state_dir), "progress": read_json(state_dir / "progress.json")})
+            elif args.command == "schedule":
+                schedule(args, state_dir)
             elif args.command == "upload":
                 config = read_json(state_dir / "config.json") if args.dry_run else configured(state_dir)
                 pending = read_json(state_dir / "progress.json").get("pending")

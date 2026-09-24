@@ -214,6 +214,53 @@ class MappingTest(unittest.TestCase):
             "ownerFullName": "name", "nested": [{"startLatitude": 1, "locationName": "place", "hr": 60}]}))
 
 
+class ScheduleTest(unittest.TestCase):
+    """定时任务跑在无人看见的地方：配置错了只会静默不执行，所以逐项钉住。"""
+
+    def spec(self, hour=10, minute=30):
+        return runner.schedule_plist("/opt/homebrew/bin/python3", Path("/skill"),
+                                     Path("/state"), hour, minute, "com.example.job")
+
+    def test_plist_runs_daily_sync_on_the_configured_state_dir(self):
+        spec = self.spec()
+        self.assertEqual("com.example.job", spec["Label"])
+        self.assertEqual(["/usr/bin/env", "python3", "/skill/scripts/garmin_sync.py",
+                          "--state-dir", "/state", "sync"], spec["ProgramArguments"])
+        self.assertEqual({"Hour": 10, "Minute": 30}, spec["StartCalendarInterval"])
+        self.assertEqual("/state/logs/schedule.log", spec["StandardOutPath"])
+        # 装载即跑会让「改个时间」意外触发一次真实取数
+        self.assertFalse(spec["RunAtLoad"])
+
+    def test_plist_does_not_pin_a_homebrew_cellar_interpreter(self):
+        """Homebrew 升级后 Cellar 里的版本目录会消失，写死路径会让任务永久静默失败。
+
+        `sys.executable` 在本机就是 Cellar 路径，所以这里专门按那种形状传进去。
+        """
+        cellar = "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/bin/python3.14"
+        spec = runner.schedule_plist(cellar, Path("/skill"), Path("/state"), 10, 30, "com.example.job")
+        self.assertNotIn("Cellar", " ".join(spec["ProgramArguments"]))
+        self.assertEqual(["/usr/bin/env", "python3", "/skill/scripts/garmin_sync.py",
+                          "--state-dir", "/state", "sync"], spec["ProgramArguments"])
+        path = spec["EnvironmentVariables"]["PATH"]
+        # launchd 环境极简：PATH 里必须能找到解释器、Chrome 所在的 brew 前缀与 uv
+        self.assertIn("/opt/homebrew/bin", path)
+        self.assertIn(".local/bin", path)
+
+    def test_plist_rejects_impossible_time(self):
+        with self.assertRaisesRegex(runner.SyncError, "定时时间无效"):
+            self.spec(hour=24)
+        with self.assertRaisesRegex(runner.SyncError, "定时时间无效"):
+            self.spec(minute=60)
+
+    def test_plist_is_valid_xml_for_launchd(self):
+        spec = self.spec()
+        if not hasattr(runner, "plistlib"):  # 兜底：模块必须暴露 plistlib 才能编码
+            self.fail("garmin_sync 未导入 plistlib")
+        decoded = runner.plistlib.loads(runner.plistlib.dumps(spec))
+        self.assertEqual(spec["Label"], decoded["Label"])
+        self.assertEqual(spec["ProgramArguments"], decoded["ProgramArguments"])
+
+
 class UploadTest(unittest.TestCase):
     def test_http_200_business_failure_is_not_success(self):
         class Handler(BaseHTTPRequestHandler):
