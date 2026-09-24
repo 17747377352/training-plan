@@ -563,7 +563,7 @@ class SyncServiceTest {
         when(ftpHistoryMapper.selectOne(any(Wrapper.class))).thenReturn(new FtpHistory());
 
         syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(), List.of(),
-                List.of(), List.of(new FtpHistoryDto("2026-08-22", 216)),
+                List.of(), List.of(new FtpHistoryDto("2026-08-22", 216, null)),
                 java.util.Map.of()));
 
         ArgumentCaptor<FtpHistory> captor = ArgumentCaptor.forClass(FtpHistory.class);
@@ -575,13 +575,46 @@ class SyncServiceTest {
     }
 
     @Test
+    void shouldKeepDerivedFtpSourceInsteadOfRelabellingItAsGarmin() {
+        // 本机浏览器上传拿不到 FTP 接口，只能按 IF = NP / FTP 反解，必须保留 DERIVED，
+        // 否则反解值会看起来像 Garmin 报出来的值，处方强度就有了假的权威依据。
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+        when(ftpHistoryMapper.selectOne(any(Wrapper.class))).thenReturn(new FtpHistory());
+
+        syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(new FtpHistoryDto("2026-09-19", 213, "derived")),
+                java.util.Map.of()));
+
+        ArgumentCaptor<FtpHistory> captor = ArgumentCaptor.forClass(FtpHistory.class);
+        verify(ftpHistoryMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getSource()).isEqualTo("DERIVED");
+        assertThat(captor.getValue().getFtpWatts()).isEqualTo(213);
+    }
+
+    @Test
+    void shouldRejectFtpRowWithUnknownSource() {
+        when(syncJobMapper.selectById(1L)).thenReturn(job());
+
+        assertThatThrownBy(() -> syncService.ingest(1L,
+                new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(), List.of(),
+                        List.of(), List.of(new FtpHistoryDto("2026-09-19", 213, "WHATEVER")),
+                        java.util.Map.of())))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(ErrorCode.PARAM_ERROR);
+
+        verify(ftpHistoryMapper, never()).insert(any(FtpHistory.class));
+        verify(ftpHistoryMapper, never()).updateById(any(FtpHistory.class));
+    }
+
+    @Test
     void shouldSkipFtpRowWithoutUsableValue() {
         when(syncJobMapper.selectById(1L)).thenReturn(job());
 
         syncService.ingest(1L, new SyncIngestRequest(List.of(), List.of(), List.of(), List.of(), List.of(),
-                List.of(), List.of(new FtpHistoryDto("2026-08-22", null),
-                        new FtpHistoryDto("2026-08-23", 0),
-                        new FtpHistoryDto("not-a-date", 210)),
+                List.of(), List.of(new FtpHistoryDto("2026-08-22", null, null),
+                        new FtpHistoryDto("2026-08-23", 0, null),
+                        new FtpHistoryDto("not-a-date", 210, null)),
                 java.util.Map.of()));
 
         verify(ftpHistoryMapper, never()).insert(any(FtpHistory.class));

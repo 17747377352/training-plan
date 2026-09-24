@@ -28,6 +28,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
+import com.trainingplan.platform.entity.TrainingStatus;
+import com.trainingplan.platform.mapper.TrainingStatusMapper;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HexFormat;
@@ -54,6 +56,7 @@ public class BrowserUploadServiceImpl implements BrowserUploadService {
     private final BrowserUploadCredentialMapper credentials;
     private final SyncService sync;
     private final UserService users;
+    private final TrainingStatusMapper trainingStatusMapper;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -84,7 +87,7 @@ public class BrowserUploadServiceImpl implements BrowserUploadService {
         RANDOM.nextBytes(random);
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(random);
         credentials.upsertCredential(account.getId(), sha256(token));
-        return new BrowserUploadPairResult(account.getId(), token);
+        return new BrowserUploadPairResult(account.getId(), token, loadFocusWarning(account.getId()));
     }
 
     @Override
@@ -217,6 +220,27 @@ public class BrowserUploadServiceImpl implements BrowserUploadService {
     }
 
     /** 对高熵上传令牌或归一化邮箱计算摘要；不记录原文。 */
+    /**
+     * 配对时提示负荷分布（load focus）是否有数据。
+     *
+     * <p>本机浏览器上传拿不到 {@code load_aerobic_*} / {@code load_anaerobic_*} 这一族
+     * （上游既无端点也无 upsert），而判灯引擎的「低强度有氧不足」诊断依赖它；平台里这一族
+     * 只有**令牌路径**能填。配对会把账号切成浏览器来源并清掉服务器令牌，所以顺序反了就得
+     * 重新导入令牌。这里不阻止配对，只把话说清楚 —— 更好的做法是先令牌同步、再配对，
+     * 因为浏览器上传不会清空已有值（upsert 走 updateById，跳过 null 字段）。</p>
+     */
+    private String loadFocusWarning(Long accountId) {
+        Long rows = trainingStatusMapper.selectCount(Wrappers.<TrainingStatus>lambdaQuery()
+                .eq(TrainingStatus::getGarminAccountId, accountId)
+                .isNotNull(TrainingStatus::getLoadAerobicLow));
+        if (rows != null && rows > 0) {
+            return null;
+        }
+        return "该账号还没有负荷分布（load focus）数据：本机浏览器上传拿不到这 10 个字段，"
+                + "判灯的「低强度有氧不足」诊断会缺依据。需要的话先用令牌路径同步一次再配对，"
+                + "已有数据不会被浏览器上传清空。";
+    }
+
     private static String sha256(String value) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")

@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import sqlite3
 import sys
 import tempfile
@@ -143,6 +144,60 @@ class MappingTest(unittest.TestCase):
 
             self.assertEqual(3610031482, activity["deviceId"])
             self.assertEqual(59.0, activity["vo2maxValue"])
+
+    def test_derived_ftp_follows_garmin_if_definition_and_marks_source(self):
+        """Garmin 的 IF 定义就是 IF = NP / FTP，所以当前 FTP 可由 NP/IF 反解。
+
+        上游没有 FTP 接口，反解是唯一来源；必须带 source=DERIVED，否则这个反解值会看起来
+        像 Garmin 报出来的值，处方强度就有了假的权威依据。同一天两次骑行只留时长最长的一次。
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "garmin.db"
+            conn = sqlite3.connect(db)
+            conn.executescript("""
+                CREATE TABLE daily_summary(calendar_date TEXT, total_steps INTEGER);
+                CREATE TABLE activity(activity_id INTEGER, activity_type TEXT, start_time_local TEXT,
+                    start_time_gmt TEXT, duration_seconds INTEGER, norm_power REAL,
+                    intensity_factor REAL, raw_json TEXT);
+            """)
+            conn.execute("INSERT INTO daily_summary VALUES (?,?)", ("2026-09-19", 1000))
+            # 同一天两次骑行，长的那次故意**排在前面**：只有这样才能区分
+            # 「取时长最长」与「取最后一次」——长的放后面时两种实现结果相同，测了等于没测。
+            conn.execute("INSERT INTO activity VALUES (?,?,?,?,?,?,?,?)", (1, "road_biking",
+                "2026-09-19 08:00:00", "2026-09-19 00:00:00", 18239, 179.0, 0.838, "{}"))
+            conn.execute("INSERT INTO activity VALUES (?,?,?,?,?,?,?,?)", (2, "road_biking",
+                "2026-09-19 18:00:00", "2026-09-19 10:00:00", 600, 100.0, 0.5, "{}"))
+            conn.commit()
+            conn.close()
+
+            ftp = build_payload(db, "2026-09-19", "2026-09-19")["data"]["ftpHistory"]
+
+            self.assertEqual([{"effectiveDate": "2026-09-19", "ftpWatts": 214, "source": "DERIVED"}], ftp)
+
+    def test_derived_ftp_skips_powerless_and_absurd_rows(self):
+        """宁可不给，也不要给一个会把处方强度带偏的数：缺 IF、IF 为 0、反解越界都要跳过。"""
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "garmin.db"
+            conn = sqlite3.connect(db)
+            conn.executescript("""
+                CREATE TABLE daily_summary(calendar_date TEXT, total_steps INTEGER);
+                CREATE TABLE activity(activity_id INTEGER, activity_type TEXT, start_time_local TEXT,
+                    start_time_gmt TEXT, duration_seconds INTEGER, norm_power REAL,
+                    intensity_factor REAL, raw_json TEXT);
+            """)
+            conn.execute("INSERT INTO daily_summary VALUES (?,?)", ("2026-09-20", 1000))
+            conn.execute("INSERT INTO activity VALUES (?,?,?,?,?,?,?,?)", (1, "road_biking",
+                "2026-09-20 08:00:00", "2026-09-20 00:00:00", 3600, 200.0, None, "{}"))      # 没有 IF
+            conn.execute("INSERT INTO activity VALUES (?,?,?,?,?,?,?,?)", (2, "road_biking",
+                "2026-09-20 09:00:00", "2026-09-20 01:00:00", 3600, 200.0, 0.0, "{}"))       # IF=0
+            conn.execute("INSERT INTO activity VALUES (?,?,?,?,?,?,?,?)", (3, "road_biking",
+                "2026-09-20 10:00:00", "2026-09-20 02:00:00", 3600, 10.0, 0.01, "{}"))       # 反解 1000W
+            conn.execute("INSERT INTO activity VALUES (?,?,?,?,?,?,?,?)", (4, "road_biking",
+                "2026-09-20 11:00:00", "2026-09-20 03:00:00", 3600, None, 0.8, "{}"))        # 没有 NP
+            conn.commit()
+            conn.close()
+
+            self.assertEqual([], build_payload(db, "2026-09-20", "2026-09-20")["data"]["ftpHistory"])
 
     def test_naps_come_from_daily_nap_dtos_array(self):
         """午睡是 dailySleepDTO 里的数组，且只在有午睡时才出现。
@@ -399,6 +454,39 @@ class DoctorTest(unittest.TestCase):
             self.assertEqual(200, len(self.doctor(state)["logTail"][0]))
 
 
+class SetupTest(unittest.TestCase):
+    """配对回执里的提醒不能吞掉：它正是「顺序反了会丢负荷分布」的现场提示。"""
+
+    def test_setup_surfaces_platform_warning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            with patch.dict(os.environ, {"GARMIN_PAIR_CODE": "ABCD1234"}), \
+                 patch.object(runner, "prepare"), \
+                 patch.object(runner, "api", return_value={"accountId": 42, "uploadToken": "t",
+                                                           "warning": "该账号还没有负荷分布（load focus）数据"}), \
+                 contextlib.redirect_stdout(io.StringIO()) as out:
+                code = runner.main(["--state-dir", str(state), "setup",
+                                    "--server", "https://example.test",
+                                    "--email", "rider@example.com", "--without-garmin-password"])
+            self.assertEqual(0, code)
+            result = json.loads(out.getvalue())
+            self.assertEqual(42, result["accountId"])
+            self.assertIn("负荷分布", result["warning"])
+
+    def test_setup_reports_no_warning_as_null(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            with patch.dict(os.environ, {"GARMIN_PAIR_CODE": "ABCD1234"}), \
+                 patch.object(runner, "prepare"), \
+                 patch.object(runner, "api", return_value={"accountId": 42, "uploadToken": "t"}), \
+                 contextlib.redirect_stdout(io.StringIO()) as out:
+                code = runner.main(["--state-dir", str(state), "setup",
+                                    "--server", "https://example.test",
+                                    "--email", "rider@example.com", "--without-garmin-password"])
+            self.assertEqual(0, code)
+            self.assertIsNone(json.loads(out.getvalue())["warning"])
+
+
 class RetryTest(unittest.TestCase):
     """上传失败大体是网络抖动或平台瞬时 5xx，重试策略直接决定日常任务是否自愈：
 
@@ -415,10 +503,14 @@ class RetryTest(unittest.TestCase):
                 index = min(calls["count"], len(statuses) - 1)
                 calls["count"] += 1
                 code = statuses[index]
+                payload = b'{"code":200,"data":{"jobId":5}}' if code == 200 else b''
                 self.send_response(code)
+                # 明确给出长度：否则客户端只能靠「连接被关」判断响应体结束，
+                # 与服务器关闭时序竞争，会让用例偶发失败（曾经 3 次里失败 1 次）
+                self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
-                if code == 200:
-                    self.wfile.write(b'{"code":200,"data":{"jobId":5}}')
+                if payload:
+                    self.wfile.write(payload)
 
             def log_message(self, *args):
                 pass

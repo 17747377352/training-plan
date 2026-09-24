@@ -24,6 +24,8 @@ import java.time.LocalDate;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -43,11 +45,13 @@ class BrowserUploadServiceTest {
     @Mock BrowserUploadCredentialMapper credentials;
     @Mock SyncService sync;
     @Mock UserService users;
+    @Mock com.trainingplan.platform.mapper.TrainingStatusMapper trainingStatusMapper;
     BrowserUploadService service;
 
     @BeforeEach
     void setUp() {
-        service = new BrowserUploadServiceImpl(pairCodes, accounts, jobs, credentials, sync, users);
+        service = new BrowserUploadServiceImpl(pairCodes, accounts, jobs, credentials, sync, users,
+                trainingStatusMapper);
     }
 
     @Test
@@ -66,6 +70,33 @@ class BrowserUploadServiceTest {
         verify(credentials).upsertCredential(eq(11L), hash.capture());
         assertEquals(64, hash.getValue().length());
         assertTrue(!hash.getValue().equals(result.uploadToken()));
+    }
+
+    @Test
+    void pairWarnsWhenLoadFocusIsMissing() {
+        // 浏览器上传拿不到负荷分布；配对会把账号切成浏览器来源并清掉服务器令牌，
+        // 所以顺序反了就得重新导入令牌。这里不阻止配对，但必须把话说清楚。
+        when(pairCodes.consume("PAIRCODE")).thenReturn(7L);
+        when(accounts.selectOne(any())).thenReturn(account());
+        when(trainingStatusMapper.selectCount(any())).thenReturn(0L);
+
+        BrowserUploadPairResult result = service.pair(
+                new BrowserUploadPairRequest("PAIRCODE", "rider@example.com", "GLOBAL"));
+
+        assertNotNull(result.warning());
+        assertTrue(result.warning().contains("负荷分布"));
+    }
+
+    @Test
+    void pairDoesNotWarnWhenLoadFocusAlreadyCollected() {
+        when(pairCodes.consume("PAIRCODE")).thenReturn(7L);
+        when(accounts.selectOne(any())).thenReturn(account());
+        when(trainingStatusMapper.selectCount(any())).thenReturn(201L);
+
+        BrowserUploadPairResult result = service.pair(
+                new BrowserUploadPairRequest("PAIRCODE", "rider@example.com", "GLOBAL"));
+
+        assertNull(result.warning());
     }
 
     @Test

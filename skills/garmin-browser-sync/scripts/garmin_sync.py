@@ -98,8 +98,10 @@ def api(server, path, payload=None, token=None, attempts=1):
             return result.get("data")
         except urllib.error.HTTPError as error:
             retryable = error.code >= 500 or error.code == 429
+            code = error.code
+            error.close()      # HTTPError 本身是响应对象：显式关掉，别等 GC 才释放连接
             if not retryable or attempt + 1 == attempts:
-                raise SyncError("平台 HTTP 错误=" + str(error.code)) from None
+                raise SyncError("平台 HTTP 错误=" + str(code)) from None
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
             if attempt + 1 == attempts:
                 raise SyncError("平台连接失败；本地数据已保留，可运行 upload 补传") from None
@@ -186,8 +188,10 @@ def setup(args, state_dir):
                     shutil.copytree(old, new, ignore=shutil.ignore_patterns("Singleton*"), symlinks=True)
                 else:
                     shutil.copy2(old, new)
+    # 平台可能带回提醒（例如账号还没有负荷分布数据）。它是给人看的，不要吞掉。
     emit({"ok": True, "action": "setup", "accountId": result["accountId"],
-          "readyForUnattended": bool(password), "stateDir": str(state_dir)})
+          "readyForUnattended": bool(password), "stateDir": str(state_dir),
+          "warning": result.get("warning")})
 
 
 def configured(state_dir, require_password=False):
@@ -207,7 +211,8 @@ def upload_range(state_dir, config, db, start, end, dry_run=False):
     if begin > finish:
         raise SyncError("开始日期晚于结束日期")
     summary = {"ok": True, "action": "upload", "dryRun": dry_run, "startDate": start, "endDate": end,
-               "counts": {}, "jobIds": [], "warnings": ["上游 0.1.13 不提供 FTP 历史，ftpHistory 留空"]}
+               "counts": {}, "jobIds": [], "warnings": []}
+    derived_ftp = 0
     while begin <= finish:
         batch_end = min(finish, begin + timedelta(days=6))
         payload = build_payload(db, begin.isoformat(), batch_end.isoformat())
@@ -223,9 +228,19 @@ def upload_range(state_dir, config, db, start, end, dry_run=False):
             progress["pending"] = None if batch_end == finish else {
                 "db": str(Path(db).resolve()), "start": (batch_end + timedelta(days=1)).isoformat(), "end": end}
             write_private(progress_file, progress)
+        # 摘要只是诊断信息：用 get 兜底，别因为载荷形状变化把上传流程本身搞挂
+        derived_ftp += len(payload["data"].get("ftpHistory") or [])
         for key, value in counts(payload).items():
             summary["counts"][key] = summary["counts"].get(key, 0) + value
         begin = batch_end + timedelta(days=1)
+    # FTP 必须说清来源：上游没有 FTP 接口，这儿的数是按 Garmin 自己的 IF 定义反解的，
+    # 不能让人以为它是 Garmin 报出来的值。
+    if derived_ftp:
+        summary["warnings"].append(
+            f"ftpHistory 有 {derived_ftp} 条由 NP/IF 反解（source=DERIVED），不是 Garmin 报出的 FTP："
+            "实测与真值相差不到 1 W，但精度受 IF 取整限制（约 ±1 W），且只有带功率计的骑行才有")
+    else:
+        summary["warnings"].append("本批没有可用于反解 FTP 的功率骑行，ftpHistory 为空")
     if not dry_run:
         write_private(state_dir / "last-run.json", summary)
     return summary

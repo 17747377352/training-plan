@@ -70,6 +70,41 @@ def rows(conn, table, start, end, column="calendar_date"):
         (start, end))]
 
 
+# 反解出来的 FTP 必须落在这个区间才算合理。Garmin 的 IF 就是按设备里的 FTP 设置算的，
+# 所以 NP/IF 本该等于 FTP；一旦越界就说明这条数据本身有问题（缺功率、IF 异常），
+# 与其上报一个会把处方强度带偏的数，不如不给。
+FTP_MIN_WATTS, FTP_MAX_WATTS = 80, 700
+FTP_SOURCE_DERIVED = "DERIVED"
+
+
+def implied_ftp(row):
+    """按 Garmin 的 IF 定义反解 FTP：`IF = NP / FTP` ⇒ `FTP = NP / IF`。
+
+    上游没有 FTP 接口，但它把 NP 与 IF 都写进了活动汇总，所以当前 FTP 是可以反解的。
+    实测三次骑行得到 213.6 / 213.0 / 212.8 W，与令牌路径取到的真实 FTP（213 W）
+    相差不到 1 W。缺字段或越界返回 None。
+    """
+    norm, intensity = row.get("norm_power"), row.get("intensity_factor")
+    if not norm or not intensity or intensity <= 0:
+        return None
+    watts = round(norm / intensity)
+    return watts if FTP_MIN_WATTS <= watts <= FTP_MAX_WATTS else None
+
+
+def derived_ftp_history(candidates):
+    """同一天只留一条（平台按「账号 + 生效日期」去重）：取当天时长最长的那次骑行。
+
+    较长骑行里的 IF 通常更稳；同一天两次短骑反而容易给出偏差更大的值。
+    """
+    best = {}
+    for started, duration, watts in candidates:
+        day = str(started)[:10]
+        if day not in best or (duration or 0) > best[day][0]:
+            best[day] = (duration or 0, watts)
+    return [{"effectiveDate": day, "ftpWatts": watts, "source": FTP_SOURCE_DERIVED}
+            for day, (_, watts) in sorted(best.items())]
+
+
 def build_payload(db_path, start, end):
     """读取指定日期范围；缺失每日数据时拒绝上报，避免把旧数据当作完整同步。"""
     start_day, end_day = date.fromisoformat(start), date.fromisoformat(end)
@@ -153,6 +188,9 @@ def build_payload(db_path, start, end):
                 # 这两项在独立表里，与训练状态同按日期对齐
                 "vo2maxValue": vo2max.get(day), "fitnessAge": fitness_age.get(day),
             })
+        # 上游没有 FTP 接口，但 Garmin 的 IF 定义就是 IF = NP / FTP，所以能用活动里的
+        # NP 与 IF 反解出当前 FTP。必须带 source=DERIVED：这是反解值，不是 Garmin 报出的值。
+        ftp_candidates = []
         for row in rows(conn, "activity", start, end, "start_time_local"):
             kind = str(row.get("activity_type") or "")
             # 平台以骑行训练为主；不把跑步或游泳混入骑行处方。
@@ -160,6 +198,10 @@ def build_payload(db_path, start, end):
                 continue
             if not row.get("activity_id") or not row.get("start_time_gmt"):
                 raise ValueError("骑行活动缺少 ID 或 GMT 开始时间")
+            # 顺便攒反解 FTP 的候选：上游没有 FTP 接口，但 NP 与 IF 都在活动汇总里
+            watts = implied_ftp(row)
+            if watts is not None:
+                ftp_candidates.append((row["start_time_local"], row.get("duration_seconds"), watts))
             response = raw(row)
             mapped = fields(row, ACTIVITY_FIELDS)
             mapped.update({"activityName": "骑行", "startTimeGmt": iso_gmt(row["start_time_gmt"]),
@@ -183,7 +225,7 @@ def build_payload(db_path, start, end):
                 data["activityHrZones"][str(row["activity_id"])] = [
                     {"zoneNumber": z["zoneNumber"], "zoneLowBoundary": z.get("zoneLowBoundary"),
                      "secondsInZone": round(z.get("secsInZone") or 0)} for z in zones if z.get("zoneNumber")]
-        # 上游当前没有 FTP 历史接口；留空并明确报告，不能把功率或乳酸阈值冒充 FTP。
+        data["ftpHistory"] = derived_ftp_history(ftp_candidates)
         return {"startDate": start, "endDate": end, "data": data}
     finally:
         conn.close()

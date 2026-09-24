@@ -91,6 +91,22 @@ python3 garmin_sync.py schedule --hour 10 --minute 30
 真正需要取新数据时才用 `sync`。生产账号若此前是用令牌导入的，配对会把它切成浏览器来源
 （清掉服务器上的令牌），旧的服务端定时采集从此跳过该账号，这是设计如此。
 
+### 顺序很重要：先令牌补负荷分布，再切浏览器
+
+本机浏览器上传拿不到 `load_aerobic_*` / `load_anaerobic_*` 与 `balanceFeedbackPhrase`（共 10 项），
+而判灯的「低强度有氧不足」诊断依赖它；这 10 项**只有令牌路径能填**。所以一个账号应该这样接：
+
+1. 先用平台的「导入令牌」或桌面助手把令牌交给平台（这一步由平台侧持有令牌）；
+2. 在平台上跑一次同步，把负荷分布采下来（约 200 天按需）；
+3. **再**用上面的配对流程切成本机浏览器上传 —— 此时服务器令牌会被清掉，旧的服务端定时采集
+   跳过该账号，这是有意的切换语义；
+4. 之后日常由本机 `sync` 维护，已采到的负荷分布**不会被清空**（平台 upsert 走 `updateById`，
+   跳过 null 字段，已实测：写入探针值后用浏览器重传同一天，探针值原样保留）。
+
+顺序反了怎么办：重新导入一次令牌、跑一次同步补齐，再重新配对即可（配对会轮换上传凭据）。
+配对成功时平台如果发现该账号还没有负荷分布数据，会在回执里带一条 `warning`，`setup` 会把它
+原样打出来 —— 看到它就先补令牌这一步，别直接开始日常同步。
+
 ## 关键设计
 
 - **配对换凭据**：一次性配对码换取只绑定一个账号的上传凭据（`storage/config.json`，600 权限），
@@ -118,11 +134,16 @@ python3 garmin_sync.py schedule --hour 10 --minute 30
 
 | 缺口 | 实测原因 | 影响 |
 |---|---|---|
-| `ftpHistory` 为空 | 上游没有 FTP 接口；`lactate_threshold` 只存阈值**心率**，没有功率 | 处方强度只能按心率换算，不能按功率百分比 |
-| `loadAerobic*`/`loadAnaerobic*`（9 项）与 `balanceFeedbackPhrase` 为空 | `load_focus` 有建表但**既无端点也无 upsert**，属真无源 | 判灯引擎的「低强度有氧不足」诊断缺依据 |
+| `loadAerobic*`/`loadAnaerobic*`（9 项）与 `balanceFeedbackPhrase` 为空 | `load_focus` 有建表但**既无端点也无 upsert**，浏览器路径拿不到 | 判灯引擎的「低强度有氧不足」诊断缺依据 —— **先用令牌路径同步一次再配对**可补上，配对时平台会就此给出提醒 |
 | 功率区间（`powerZone1~7Seconds`）为空 | 活动详情只在调试产物里，上游不写库；映射已留前向兼容代码 | 间歇质量分析缺少功率分布 |
 | `training_readiness`/`endurance_score`/`hill_score` 为空 | 上游**确实请求了**这些端点，本账号返回空（204 空内容 / 空数组），平台也无对应字段 | 不是接线缺口；换设备或账号开通后仍需先加平台字段 |
 | `avgElevation`/`max20minPower`/`avgLeftBalance`/`trainingEffectLabel`/`strokes` 为空 | 上游 `activity` 表没有这些列 | 骑行细节分析少几项 |
+
+> `ftpHistory` **不再是缺口**：上游确实没有 FTP 接口，但 Garmin 的 IF 定义就是 `IF = NP / FTP`，
+> 所以映射会按 `norm_power / intensity_factor` 反解当前 FTP，并显式标成 `source=DERIVED`
+> （不冒充 Garmin 报出的值）。实测三次骑行反解 213.0~213.6 W，与令牌路径取到的真实
+> FTP（2026-08-29 = 213 W）相差不到 1 W；只有带功率计的骑行才有，精度受 IF 取整限制（约 ±1 W）。
+> 同一天多次骑行只取时长最长的那次。
 
 ## 失败模式与处置
 

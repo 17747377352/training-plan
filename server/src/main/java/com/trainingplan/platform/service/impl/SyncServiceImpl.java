@@ -62,7 +62,9 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Garmin 数据同步服务实现。
@@ -89,6 +91,8 @@ public class SyncServiceImpl implements SyncService {
 
     /** FTP 来源：Garmin 自动测算。 */
     private static final String SOURCE_GARMIN = "GARMIN";
+    /** FTP 允许的来源：Garmin 接口测得 / 由 NP/IF 反解 / 手工录入。 */
+    private static final Set<String> FTP_SOURCES = Set.of(SOURCE_GARMIN, "DERIVED", "MANUAL");
 
     /** 看板统计「最近 N 天失败数」的窗口。 */
     private static final int FAILURE_WINDOW_DAYS = 7;
@@ -899,7 +903,7 @@ public class SyncServiceImpl implements SyncService {
             entity.setGarminAccountId(accountId);
             entity.setEffectiveDate(date);
             entity.setFtpWatts(dto.ftpWatts());
-            entity.setSource(SOURCE_GARMIN);
+            entity.setSource(resolveFtpSource(dto.source()));
             if (existing == null) {
                 ftpHistoryMapper.insert(entity);
             } else {
@@ -908,6 +912,24 @@ public class SyncServiceImpl implements SyncService {
             affected++;
         }
         return affected;
+    }
+
+    /**
+     * 归一化 FTP 来源。
+     *
+     * <p>空值按 {@code GARMIN} 处理，兼容只上报两个字段的采集器；显式给出的值必须在白名单里，
+     * 否则宁可整批失败也不要静默改标 —— 把「反解出来的值」写成「Garmin 报出来的值」会让
+     * 处方强度看起来有权威依据，而这正是不能含糊的地方。</p>
+     */
+    private String resolveFtpSource(String source) {
+        if (source == null || source.isBlank()) {
+            return SOURCE_GARMIN;
+        }
+        String normalized = source.trim().toUpperCase(Locale.ROOT);
+        if (!FTP_SOURCES.contains(normalized)) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "FTP 来源无效：" + normalized);
+        }
+        return normalized;
     }
 
     /**
