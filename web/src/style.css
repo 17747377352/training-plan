@@ -1992,6 +1992,30 @@ body {
   color: #9aa4b2;
 }
 
+.ftp-chart {
+  width: 100%;
+  height: 260px;
+}
+
+.ftp-summary {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: #5c6675;
+}
+
+.ftp-delta {
+  margin-left: 6px;
+  font-weight: 600;
+}
+
+.ftp-delta.is-up {
+  color: #16a34a;
+}
+
+.ftp-delta.is-down {
+  color: #dc2626;
+}
+
 .metric-empty {
   margin: 0;
   font-size: 13px;

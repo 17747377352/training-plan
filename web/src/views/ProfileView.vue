@@ -7,9 +7,12 @@ import {
   saveTrainingGoal,
 } from "../api/goals";
 import { getProfileOverview } from "../api/profile";
+import { listFtp } from "../api/training";
 import FeaturePanel from "../components/FeaturePanel.vue";
+import FtpHistoryChart from "../components/FtpHistoryChart.vue";
 import PageHeading from "../components/PageHeading.vue";
 import type {
+  FtpRecord,
   GoalType,
   ProfileOverview,
   TrainingGoalForm,
@@ -44,6 +47,8 @@ const currentType = computed(
 const overview = ref<ProfileOverview | null>(null);
 const overviewLoading = ref(true);
 const overviewFailed = ref(false);
+/** FTP 变更历史：稀疏的「变更点」，图表里画成阶跃线。 */
+const ftpRows = ref<FtpRecord[]>([]);
 
 /** 目标日期不允许早于今天；今天的 0 点用于和日期选择器比较。 */
 const todayStart = new Date();
@@ -166,13 +171,29 @@ async function loadOverview(): Promise<void> {
   overviewLoading.value = true;
   overviewFailed.value = false;
   try {
-    overview.value = await getProfileOverview();
+    const [data, ftp] = await Promise.all([getProfileOverview(), listFtp()]);
+    overview.value = data;
+    ftpRows.value = ftp;
   } catch {
     overviewFailed.value = true;
   } finally {
     overviewLoading.value = false;
   }
 }
+
+/** FTP 变更点之间的差值，用于在图表下方给一句人话总结。 */
+const ftpDelta = computed(() => {
+  const rows = ftpRows.value;
+  if (rows.length < 2) return null;
+  const first = rows[0];
+  const last = rows[rows.length - 1];
+  return {
+    from: first.ftpWatts,
+    to: last.ftpWatts,
+    diff: last.ftpWatts - first.ftpWatts,
+    changes: rows.length,
+  };
+});
 
 async function loadGoal(): Promise<void> {
   loading.value = true;
@@ -289,6 +310,34 @@ onMounted(refresh);
           <p v-if="item.hint" class="metric-hint">{{ item.hint }}</p>
         </div>
       </div>
+    </el-card>
+
+    <el-card v-loading="overviewLoading" class="goal-card" shadow="never">
+      <div class="goal-head">
+        <div>
+          <p class="goal-title">FTP 变化</p>
+          <p class="goal-hint">
+            画成阶跃线：FTP 一直沿用到下次变更，所以阶梯的每一段就是那段时间实际生效的值。
+            最后一个点延长到今天表示它仍然生效；只有本机浏览器上传时，新值会标注为「由 NP/IF 反解」。
+          </p>
+        </div>
+        <el-tag v-if="ftpDelta" type="info" effect="plain">
+          共 {{ ftpDelta.changes }} 次变更
+        </el-tag>
+      </div>
+
+      <p v-if="!overviewLoading && ftpRows.length === 0" class="metric-empty">
+        还没有 FTP 记录。绑定 Garmin 后同步一次即可；本机浏览器上传会按活动功率反解当前 FTP。
+      </p>
+      <template v-else>
+        <FtpHistoryChart :rows="ftpRows" />
+        <p v-if="ftpDelta" class="ftp-summary">
+          {{ ftpDelta.from }} W → {{ ftpDelta.to }} W
+          <span :class="['ftp-delta', ftpDelta.diff >= 0 ? 'is-up' : 'is-down']">
+            {{ ftpDelta.diff >= 0 ? "+" : "" }}{{ ftpDelta.diff }} W
+          </span>
+        </p>
+      </template>
     </el-card>
 
     <el-alert

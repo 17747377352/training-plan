@@ -93,6 +93,16 @@ const INITIAL_BACKFILL_DAYS = 60;
 /** 手动同步默认回溯天数，与开发计划的增量策略一致（覆盖 Garmin 延迟修正）。 */
 const MANUAL_SYNC_DAYS = 7;
 
+/**
+ * 可选的更长回溯。日常用 7 天就够；换设备、想补历史或看长期趋势时才需要更长的区间。
+ * 上限与后端一致（`SyncServiceImpl.MAX_DAYS = 365`），超过会被夹住。
+ */
+const BACKFILL_RANGES: Array<{ days: number; label: string }> = [
+  { days: 30, label: "回溯 30 天" },
+  { days: 90, label: "回溯 90 天" },
+  { days: 365, label: "回溯一年" },
+];
+
 const STATUS_LABELS: Record<GarminAuthStatus, string> = {
   PENDING: "待认证",
   PENDING_MFA: "待输入验证码",
@@ -174,11 +184,15 @@ async function handleBackfill(agree: boolean) {
   }
 }
 
-async function handleSync(account: GarminAccount) {
+async function handleSync(account: GarminAccount, days: number = MANUAL_SYNC_DAYS) {
   syncingId.value = account.id;
   try {
-    await triggerSync(account.id, MANUAL_SYNC_DAYS);
-    ElMessage.success(`已提交同步（最近 ${MANUAL_SYNC_DAYS} 天）`);
+    await triggerSync(account.id, days);
+    ElMessage.success(
+      days === MANUAL_SYNC_DAYS
+        ? `已提交同步（最近 ${days} 天）`
+        : `已提交回溯（最近 ${days} 天），数据量大时会跑几分钟`,
+    );
   } catch {
     // 错误提示由拦截器统一处理
   } finally {
@@ -431,6 +445,24 @@ onMounted(loadAccounts);
             >
               同步
             </el-button>
+            <el-dropdown
+              trigger="click"
+              :disabled="syncingId === row.id"
+              @command="(days: number) => handleSync(row, days)"
+            >
+              <el-button link :disabled="syncingId === row.id">更多回溯</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-for="range in BACKFILL_RANGES"
+                    :key="range.days"
+                    :command="range.days"
+                  >
+                    {{ range.label }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-button
               link
               :loading="verifyingId === row.id"
