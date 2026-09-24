@@ -55,6 +55,9 @@ public class SecurityConfig {
                         // 凭据是请求体里的一次性配对码（由已登录用户在页面上领取）。
                         // 这里只放行这一个精确路径，其余 /api/garmin/accounts/** 仍需登录。
                         .requestMatchers(HttpMethod.POST, "/api/garmin/accounts/pair").permitAll()
+                        // 浏览器上传通道分别由一次性配对码、账号专用上传凭据鉴权，撤销仍需平台 JWT。
+                        .requestMatchers(HttpMethod.POST, "/api/garmin/browser-upload/pair",
+                                "/api/garmin/browser-upload/ingest").permitAll()
                         // 内部接口由 CollectorTokenFilter 用服务凭据鉴权，不走用户令牌
                         .requestMatchers("/internal/**").permitAll()
                         .anyRequest().authenticated())
