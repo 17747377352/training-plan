@@ -89,7 +89,7 @@ async function copyPairCommands(platform: keyof typeof pairCommands) {
 }
 
 /** 首次绑定后可选拉取的历史天数。 */
-const INITIAL_BACKFILL_DAYS = 15;
+const INITIAL_BACKFILL_DAYS = 60;
 /** 手动同步默认回溯天数，与开发计划的增量策略一致（覆盖 Garmin 延迟修正）。 */
 const MANUAL_SYNC_DAYS = 7;
 
@@ -551,11 +551,8 @@ onMounted(loadAccounts);
 
       <ol class="pair-steps">
         <li>
-          下载助手
-          <a :href="PAIR_HELPER_URL" :download="PAIR_HELPER_FILE">{{
-            PAIR_HELPER_FILE
-          }}</a>
-          ，也可以直接执行下方命令，自动下载并启动。 请先安装
+          在你自己的电脑打开终端，执行下方完整命令，自动下载并启动助手。
+          请先安装
           <a
             href="https://www.python.org/downloads/"
             target="_blank"
