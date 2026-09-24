@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElTabPane, ElTabs } from "element-plus";
 import PageHeading from "../components/PageHeading.vue";
 import {
   createPairCode,
@@ -47,6 +47,46 @@ let pairPollTimer: number | undefined;
 /** 助手文件名与下载地址：它由前端静态目录原样发布，用户点链接即可保存。 */
 const PAIR_HELPER_FILE = "garmin_pair_helper.py";
 const PAIR_HELPER_URL = `${import.meta.env.BASE_URL}${PAIR_HELPER_FILE}`;
+const helperDownloadUrl = new URL(PAIR_HELPER_URL, window.location.origin).href;
+const helperServerUrl = new URL(
+  import.meta.env.VITE_API_BASE_URL || "/",
+  window.location.origin,
+).href.replace(/\/$/, "");
+
+/** 两套命令均从用户目录开始，下载地址和服务端地址跟随当前部署环境。 */
+const pairCommands = {
+  mac: `mkdir -p "$HOME/garmin-pair-helper" &&
+cd "$HOME/garmin-pair-helper" &&
+curl --fail --location --output garmin_pair_helper.py '${helperDownloadUrl}' &&
+python3 -c "import sys; assert sys.version_info >= (3, 12), 'Python 3.12+ required'" &&
+python3 -m venv .venv &&
+.venv/bin/python -m pip install garminconnect==0.3.16 playwright &&
+.venv/bin/python -m playwright install chromium &&
+.venv/bin/python garmin_pair_helper.py --manual --server '${helperServerUrl}'`,
+  // 直接调用虚拟环境解释器，无需激活脚本或更改 PowerShell 执行策略。
+  windows: String.raw`$ErrorActionPreference = 'Stop'
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\garmin-pair-helper" | Out-Null
+Set-Location "$env:USERPROFILE\garmin-pair-helper"
+Invoke-WebRequest -Uri '${helperDownloadUrl}' -OutFile garmin_pair_helper.py
+py -3 -c "import sys; assert sys.version_info >= (3, 12), 'Python 3.12+ required'"
+if ($LASTEXITCODE -ne 0) { throw '请先安装 Python 3.12 或更高版本' }
+py -3 -m venv .venv
+if ($LASTEXITCODE -ne 0) { throw '创建虚拟环境失败，请查看上方错误' }
+.\.venv\Scripts\python.exe -m pip install garminconnect==0.3.16 playwright
+if ($LASTEXITCODE -ne 0) { throw '安装依赖失败，请查看上方错误' }
+.\.venv\Scripts\python.exe -m playwright install chromium
+if ($LASTEXITCODE -ne 0) { throw '安装浏览器失败，请查看上方错误' }
+.\.venv\Scripts\python.exe garmin_pair_helper.py --manual --server '${helperServerUrl}'`,
+};
+
+async function copyPairCommands(platform: keyof typeof pairCommands) {
+  try {
+    await navigator.clipboard.writeText(pairCommands[platform]);
+    ElMessage.success("完整命令已复制");
+  } catch {
+    ElMessage.info("复制失败，请手动选中下方命令复制");
+  }
+}
 
 /** 首次绑定后可选拉取的历史天数。 */
 const INITIAL_BACKFILL_DAYS = 15;
@@ -497,7 +537,8 @@ onMounted(loadAccounts);
     <el-dialog
       v-model="pairDialogVisible"
       title="用桌面助手绑定 Garmin"
-      width="520px"
+      width="760px"
+      class="pair-dialog"
       @closed="stopPairPolling"
     >
       <el-alert type="info" :closable="false" class="import-hint">
@@ -514,19 +555,37 @@ onMounted(loadAccounts);
           <a :href="PAIR_HELPER_URL" :download="PAIR_HELPER_FILE">{{
             PAIR_HELPER_FILE
           }}</a>
-          ，在它所在目录执行（需要 Python 3.12+；依赖装在独立环境里，
-          不会动你的系统 Python）
-          <pre class="pair-cmd">
-python3 -m venv .venv
-.venv/bin/python -m pip install garminconnect==0.3.16 playwright
-.venv/bin/python -m playwright install chromium
-.venv/bin/python garmin_pair_helper.py --manual</pre>
+          ，也可以直接执行下方命令，自动下载并启动。 请先安装
+          <a
+            href="https://www.python.org/downloads/"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Python 3.12 或更高版本</a
+          >（Windows 安装时保留 Python Launcher）。
+          <el-tabs model-value="mac" class="pair-command-tabs">
+            <el-tab-pane label="macOS · 终端" name="mac">
+              <el-button size="small" @click="copyPairCommands('mac')"
+                >复制 macOS 完整命令</el-button
+              >
+              <pre class="pair-cmd">{{ pairCommands.mac }}</pre>
+            </el-tab-pane>
+            <el-tab-pane label="Windows · PowerShell" name="windows">
+              <el-button size="small" @click="copyPairCommands('windows')"
+                >复制 Windows 完整命令</el-button
+              >
+              <pre class="pair-cmd">{{ pairCommands.windows }}</pre>
+              <p class="pair-hint">
+                在 PowerShell 中运行，无需管理员权限或修改执行策略。请勿粘贴到
+                CMD。
+              </p>
+            </el-tab-pane>
+          </el-tabs>
           <span class="pair-hint"
-            >Windows 把 Python 路径换成 <code>.venv\Scripts\python</code>。
-            首次需下载浏览器，完成安装后再领取配对码。
-            <b><code>--manual</code> 是推荐用法</b>：助手只打开 Garmin
-            官方页面，由你自己输入账号密码（因此不需要填密码、密码也不经过助手）；
-            代填代提交本身会被识别为机器人、直接触发人机验证。</span
+            >命令会在用户目录创建
+            <code>garmin-pair-helper</code> 文件夹，依赖安装到其中的独立环境。
+            首次安装需要下载浏览器，请保持终端打开，安装完成后再领取配对码。
+            命令已开启手动登录：账号密码和验证码只在弹出的 Garmin
+            官方页面填写。</span
           >
         </li>
         <li>
@@ -542,7 +601,10 @@ python3 -m venv .venv
             {{ Math.round(pairSeconds / 60) }} 分钟内有效，只能用一次</span
           >
         </li>
-        <li>在助手里填 Garmin 邮箱、密码，点「开始绑定」，按提示填写验证码</li>
+        <li>
+          在助手里填配对码、Garmin 邮箱和站点，点「开始绑定」，然后在弹出的
+          Garmin 官方页面完成登录
+        </li>
         <li>助手提示成功后，这个窗口会自动关闭并刷新账号列表</li>
       </ol>
 
@@ -625,6 +687,14 @@ python3 -m venv .venv
 .pair-hint {
   font-size: 12px;
   color: #909399;
+}
+
+:global(.pair-dialog) {
+  max-width: calc(100vw - 32px);
+}
+
+.pair-command-tabs {
+  margin: 8px 0;
 }
 
 /* 给终端用户直接可复制的命令块：他们看不到仓库里的文档 */
