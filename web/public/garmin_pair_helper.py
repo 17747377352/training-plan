@@ -273,6 +273,9 @@ class BrowserLogin:
         self.channel = channel
         self.runtime = self.browser = self.context = self.page = None
         self.result = None
+        # 手动模式下官网自己完成登录，票据只出现在被中止的那条导航 URL 里，
+        # 必须记下来，否则等于把登录结果丢掉（窗口会显示 ERR_FAILED，那是故意中止的）。
+        self.held_ticket = None
         self.mfa_method = "email"
         self.token = None
         self.stage = "init"
@@ -399,15 +402,32 @@ class BrowserLogin:
             f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == self.service
             and "ticket" in urllib.parse.parse_qs(parsed.query)
         ):
+            # 中止这条导航的同时要把票据留下来：手动模式下用户是在官网页面登录的，
+            # 登录接口的 JSON 响应不经过我们，票据只在这里出现过一次。不留就等于
+            # 把刚拿到的登录结果扔掉，用户只会在窗口里看到 ERR_FAILED 然后等到超时。
+            self.held_ticket = urllib.parse.parse_qs(parsed.query)["ticket"][0]
+            DIAGNOSTICS.info("stage=ticket_held")
             route.abort()
         else:
             route.continue_()
+
+    def _take_held_ticket(self):
+        """取出被拦下的 CAS 票据并兑换；没有可用的票据时返回 False。
+
+        兑换只做一次（票据一次性），取完即清空，避免重复兑换被 Garmin 拒绝。
+        """
+        if not self.held_ticket:
+            return False
+        ticket, self.held_ticket = self.held_ticket, None
+        self._exchange_ticket(ticket)
+        return True
 
     def login(self, email: str, password: str):
         from playwright.sync_api import TimeoutError as PlaywrightTimeout
         from playwright.sync_api import sync_playwright
 
         self._secrets = [email, password]
+        self.held_ticket = None
         self._stage("browser_launch")
         self.runtime = sync_playwright().start()
         try:
@@ -469,6 +489,8 @@ class BrowserLogin:
         self._stage("login_result")
         last_summary = ""
         while time.monotonic() < deadline:
+            if self._take_held_ticket():
+                return None, None
             if self.result is not None:
                 result, self.result = self.result, None
                 # 保留 None / 空数组等原始类型，供等待逻辑辨别无法解析的响应。

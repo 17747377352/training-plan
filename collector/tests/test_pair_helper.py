@@ -279,6 +279,72 @@ def test_manual_mode_keeps_window_open_on_403(helper, manual, headed, status, ex
     assert session._should_keep_waiting(body, {"status": status}) is expected
 
 
+class _Route:
+    """Playwright route 的最小替身：只关心 URL 与「被中止 / 被放行」。"""
+
+    def __init__(self, url):
+        self.request = type("Req", (), {"url": url})()
+        self.aborted = False
+        self.continued = False
+
+    def abort(self):
+        self.aborted = True
+
+    def continue_(self):
+        self.continued = True
+
+
+def test_held_ticket_is_kept_instead_of_thrown_away(helper):
+    """官网登录成功后票据只出现在被中止的那条导航 URL 里。
+
+    拦下它正是设计意图（票据一次性，不能被官网换成无法导入的 Cookie），但**必须记下来**：
+    手动模式下用户是在官网页面登录的，登录接口的 JSON 响应不经过助手，丢掉这条 URL 就等于
+    把刚拿到的登录结果扔掉 —— 用户只会在窗口里看到 ERR_FAILED，然后一直等到超时（实测如此）。
+    """
+    session = helper.BrowserLogin("GLOBAL", headed=True, manual=True)
+    route = _Route("https://connect.garmin.com/app?ticket=ST-2427857-abc-sso")
+
+    session._hold_ticket(route)
+
+    assert route.aborted is True, "票据导航必须中止，否则票据会被官网消费掉"
+    assert session.held_ticket == "ST-2427857-abc-sso"
+
+
+def test_held_ticket_is_exchanged_once(helper):
+    session = helper.BrowserLogin("GLOBAL", headed=True, manual=True)
+    exchanged = []
+    session._exchange_ticket = exchanged.append
+    session.held_ticket = "ST-1"
+
+    assert session._take_held_ticket() is True
+    assert exchanged == ["ST-1"]
+    # 票据一次性：取过就必须清空，不能重复兑换
+    assert session.held_ticket is None
+    assert session._take_held_ticket() is False
+
+
+def test_hold_ticket_ignores_normal_navigations(helper):
+    """只有「登录后的票据跳转」才拦；其它请求一律放行，否则页面根本打不开。"""
+    session = helper.BrowserLogin("GLOBAL", headed=True, manual=True)
+    route = _Route("https://connect.garmin.com/app/home")
+
+    session._hold_ticket(route)
+
+    assert route.continued is True
+    assert route.aborted is False
+    assert session.held_ticket is None
+
+
+def test_hold_ticket_ignores_ticket_on_another_host(helper):
+    session = helper.BrowserLogin("GLOBAL", headed=True, manual=True)
+    route = _Route("https://evil.example.com/app?ticket=ST-1")
+
+    session._hold_ticket(route)
+
+    assert route.continued is True
+    assert session.held_ticket is None
+
+
 @pytest.mark.parametrize(
     "result",
     [
