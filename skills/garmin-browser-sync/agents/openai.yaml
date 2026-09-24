@@ -1,0 +1,4 @@
+interface:
+  display_name: "Garmin 浏览器同步"
+  short_description: "在本机浏览器采集佳明健康与骑行数据，校验后推送到训练平台，支持失败补传"
+  default_prompt: "使用 $garmin-browser-sync 同步最近几天的佳明数据到我的训练平台，并报告服务器入库结果。"
