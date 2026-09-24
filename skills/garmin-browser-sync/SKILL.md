@@ -46,7 +46,7 @@ python3 garmin_sync.py sync
 python3 garmin_sync.py upload --since 2026-09-12 --until 2026-09-24
 python3 garmin_sync.py upload --db <其它 garmin.db> --dry-run   # 只看会传多少条
 
-# 5. 改 Garmin 密码 / 体检（体检不显示凭据）
+# 5. 改 Garmin 密码 / 体检（体检不显示凭据，也会报告定时任务与上次运行结果）
 GARMIN_PASSWORD=<新密码> python3 garmin_sync.py credentials
 python3 garmin_sync.py doctor
 
@@ -59,6 +59,11 @@ python3 garmin_sync.py schedule --uninstall        # 卸载
 无人值守要求先配好 Garmin 密码（`doctor` 的 `garminCredentialReady` 必须为 true）；
 只有 `upload` 补传不需要密码。多套配置（例如测试环境与线上各一份）用 `--state-dir`
 配 `--label` 各装一个任务。
+
+密码不是可选项：上游 CLI 在**恢复会话之前**就要求环境里的密码非空（实测空密码 0.5 秒即
+`Aborted.` 退出、不发任何请求），所以「不存密码、靠已有会话跑」这条路走不通。
+判断无人值守有没有在跑，看 `doctor` 的 `schedule.installed/loaded`、`lastRun` 与 `logTail`
+这三项即可。
 
 `--state-dir` 可指定状态目录（默认在 skill 自己的 `storage/`）。所有命令输出单行 JSON，便于 agent
 读取与汇报；失败时为 `{"ok": false, "error": ...}` 并以退出码 1 结束。
@@ -157,4 +162,5 @@ python3 -m unittest discover -s tests
 （`latestTrainingStatusData[设备ID]`）、VO2max 按运动类型取骑行（且与入库顺序无关）、午睡数组、
 心率区间转置、设备 ID、`sync` 的三道闸门（缺新鲜每日数据、活动列表请求失败都不推进检查点）、
 定时 plist（不写死解释器路径、时间校验、能被 launchd 解析、未就绪时拒绝装载）、
+`doctor` 的无人值守三项（任务装没装、上次运行、日志尾巴按行截断）、
 HTTP 200 + 业务失败不算成功、断点补传、坏回执不推进检查点、并发运行被拒。

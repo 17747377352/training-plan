@@ -302,6 +302,15 @@ def launchctl(action, label, path=None):
     return result.returncode == 0, (result.stdout or result.stderr).strip()
 
 
+def log_tail(state_dir, lines=3, width=200):
+    """定时任务的日志尾巴：只看最后几行，按行长截断，避免把整份日志塞进摘要。"""
+    log_file = Path(state_dir) / "logs" / "schedule.log"
+    if not log_file.exists():
+        return []
+    content = log_file.read_text(errors="replace").splitlines()
+    return [line[:width] for line in content if line.strip()][-lines:]
+
+
 def schedule(args, state_dir):
     label = args.label or DEFAULT_SCHEDULE_LABEL
     target = plist_path(label)
@@ -374,7 +383,8 @@ def main(argv=None):
     parser.add_argument("--state-dir", type=Path, default=SKILL_DIR / "storage")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("prepare", help="安装隔离运行环境")
-    commands.add_parser("doctor", help="检查环境与配对状态，不显示凭据")
+    doctor = commands.add_parser("doctor", help="检查环境、配对与定时任务状态，不显示凭据")
+    doctor.add_argument("--label", help="要检查的定时任务标签，默认用内置标签")
     commands.add_parser("credentials", help="更新本机保存的 Garmin 密码")
     init = commands.add_parser("setup", help="首次配对并配置本机运行环境")
     init.add_argument("--server", default=DEFAULT_SERVER)
@@ -412,10 +422,18 @@ def main(argv=None):
             elif args.command == "doctor":
                 config = read_json(state_dir / "config.json")
                 health = api(config.get("server", DEFAULT_SERVER), "/api/system/health")
+                label = args.label or DEFAULT_SCHEDULE_LABEL
+                plist = plist_path(label)
+                installed = plist.exists()
+                loaded = launchctl("print", label)[0] if installed and sys.platform == "darwin" else False
                 emit({"ok": True, "serverStatus": health.get("status"),
                       "runtimeReady": python_path(state_dir).exists(), "paired": bool(config.get("uploadToken")),
                       "garminCredentialReady": bool(config.get("garminPassword") or os.environ.get("GARMIN_PASSWORD")),
-                      "stateDir": str(state_dir), "progress": read_json(state_dir / "progress.json")})
+                      "stateDir": str(state_dir), "progress": read_json(state_dir / "progress.json"),
+                      # 无人值守是否真的在跑，看这三项：任务装了没、上次跑成什么样、日志尾巴
+                      "schedule": {"label": label, "plist": str(plist), "installed": installed, "loaded": loaded},
+                      "lastRun": read_json(state_dir / "last-run.json", {}),
+                      "logTail": log_tail(state_dir)})
             elif args.command == "schedule":
                 schedule(args, state_dir)
             elif args.command == "upload":

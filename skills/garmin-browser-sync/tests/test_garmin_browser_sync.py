@@ -314,10 +314,11 @@ class SyncGuardTest(unittest.TestCase):
     def run_sync(self, manifest):
         with patch.object(runner, "capture", return_value=manifest), \
              patch.object(runner, "upload_range", return_value={"jobIds": [7]}) as upload:
-            try:
-                runner.sync(argparse.Namespace(since=self.start.isoformat(), visible=False), self.state)
-            except runner.SyncError as error:
-                return upload, str(error)
+            with contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    runner.sync(argparse.Namespace(since=self.start.isoformat(), visible=False), self.state)
+                except runner.SyncError as error:
+                    return upload, str(error)
         return upload, None
 
     def test_missing_daily_data_blocks_checkpoint(self):
@@ -345,6 +346,57 @@ class SyncGuardTest(unittest.TestCase):
         self.assertEqual((self.start.isoformat(), self.end.isoformat()), upload.call_args[0][3:5])
         self.assertEqual(self.end.isoformat(),
                          runner.read_json(self.state / "progress.json")["lastFetchedDate"])
+
+
+class DoctorTest(unittest.TestCase):
+    """`doctor` 是判断「无人值守到底有没有在跑」的入口，三项都不能缺。"""
+
+    def doctor(self, state, extra=()):
+        argv = ["--state-dir", str(state), "doctor", *extra]
+        with patch.object(runner, "api", return_value={"status": "UP"}), \
+             patch.object(runner, "plist_path", return_value=state / "job.plist"), \
+             patch.object(runner, "launchctl", return_value=(True, "")), \
+             contextlib.redirect_stdout(io.StringIO()) as out:
+            code = runner.main(argv)
+        self.assertEqual(0, code)
+        return json.loads(out.getvalue())
+
+    def test_doctor_reports_schedule_state_and_last_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            runner.write_private(state / "config.json",
+                                 {"server": "https://example.test", "uploadToken": "t"})
+            runner.write_private(state / "last-run.json",
+                                 {"ok": True, "action": "sync", "jobIds": [99]})
+            result = self.doctor(state)
+            self.assertFalse(result["schedule"]["installed"], "没装任务时不能报成已装")
+            self.assertEqual([99], result["lastRun"]["jobIds"])
+            (state / "job.plist").write_text("plist")
+            result = self.doctor(state)
+            self.assertTrue(result["schedule"]["installed"])
+            self.assertTrue(result["schedule"]["loaded"])
+
+    def test_doctor_shows_only_the_tail_of_the_schedule_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            runner.write_private(state / "config.json",
+                                 {"server": "https://example.test", "uploadToken": "t"})
+            (state / "logs").mkdir()
+            lines = ["old-" + str(i) for i in range(10)] + ["", "  ", "newest"]
+            (state / "logs" / "schedule.log").write_text("\n".join(lines))
+            tail = self.doctor(state)["logTail"]
+            self.assertEqual("newest", tail[-1])
+            self.assertLessEqual(len(tail), 3, "只看尾巴，不要把整份日志塞进摘要")
+            self.assertNotIn("old-0", tail)
+
+    def test_doctor_truncates_long_log_lines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            runner.write_private(state / "config.json",
+                                 {"server": "https://example.test", "uploadToken": "t"})
+            (state / "logs").mkdir()
+            (state / "logs" / "schedule.log").write_text("x" * 5000)
+            self.assertEqual(200, len(self.doctor(state)["logTail"][0]))
 
 
 class UploadTest(unittest.TestCase):
