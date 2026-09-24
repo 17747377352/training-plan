@@ -399,6 +399,60 @@ class DoctorTest(unittest.TestCase):
             self.assertEqual(200, len(self.doctor(state)["logTail"][0]))
 
 
+class RetryTest(unittest.TestCase):
+    """上传失败大体是网络抖动或平台瞬时 5xx，重试策略直接决定日常任务是否自愈：
+
+    该重试的（5xx / 429 / 连接失败）要重试，不该重试的（4xx 业务拒绝）必须立刻停手，
+    否则一次注定失败的请求会白耗 3 次往返。
+    """
+
+    def serve(self, statuses):
+        """按顺序返回给定状态码，并记录收到的请求次数。"""
+        calls = {"count": 0}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                index = min(calls["count"], len(statuses) - 1)
+                calls["count"] += 1
+                code = statuses[index]
+                self.send_response(code)
+                self.end_headers()
+                if code == 200:
+                    self.wfile.write(b'{"code":200,"data":{"jobId":5}}')
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_port}", calls
+
+    def test_transient_server_error_is_retried_until_success(self):
+        url, calls = self.serve([500, 429, 200])
+        with patch.object(runner.time, "sleep"):      # 不要真的等 1+2 秒
+            result = runner.api(url, "/ingest", {}, "t", attempts=3)
+        self.assertEqual({"jobId": 5}, result)
+        self.assertEqual(3, calls["count"])
+
+    def test_client_error_is_not_retried(self):
+        """400 是请求本身有问题，重试三次只是浪费往返，还会拖慢日常任务。"""
+        url, calls = self.serve([400])
+        with self.assertRaisesRegex(runner.SyncError, "400"):
+            runner.api(url, "/ingest", {}, "t", attempts=3)
+        self.assertEqual(1, calls["count"])
+
+    def test_server_error_is_reported_after_attempts_are_used_up(self):
+        url, calls = self.serve([503])
+        with patch.object(runner.time, "sleep"):
+            with self.assertRaisesRegex(runner.SyncError, "503"):
+                runner.api(url, "/ingest", {}, "t", attempts=3)
+        self.assertEqual(3, calls["count"])
+
+
 class UploadTest(unittest.TestCase):
     def test_http_200_business_failure_is_not_success(self):
         class Handler(BaseHTTPRequestHandler):
